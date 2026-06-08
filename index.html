@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<!-- saved from url=(0024)http://72.56.84.16:9999/ -->
+<html lang="ru"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+    <title>Панель управления Джинни</title>
+    <style>
+        body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 600px; text-align: center; }
+        h1 { font-size: 20px; letter-spacing: 3px; margin-bottom: 25px; text-shadow: 0 0 10px #00f0ff; }
+        .arc-btn { background: #005577; border: 2px solid #fff; color: #fff; padding: 15px 35px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 30px; box-shadow: 0 0 15px #00f0ff; margin-bottom: 15px; transition: all 0.3s ease; }
+        .recording { background: #ff0055 !important; box-shadow: 0 0 30px #ff0055 !important; }
+        .status { margin-bottom: 15px; font-size: 13px; color: #88aadd; }
+        .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 250px; overflow-y: auto; text-align: left; padding: 15px; margin-bottom: 15px; }
+        .message { margin-bottom: 12px; line-height: 1.4; font-size: 13px; }
+        .msg-user { color: #e1e1e1; }
+        .msg-user::before { content: "Сэр> "; color: #88aadd; font-weight: bold; }
+        .msg-jinni { color: #00f0ff; }
+        .msg-jinni::before { content: "Джинни> "; color: #00f0ff; font-weight: bold; }
+        .input-area { display: flex; gap: 10px; align-items: center; }
+        .text-input { flex: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; }
+        .text-input:focus { border-color: #00f0ff; box-shadow: 0 0 10px rgba(0,240,255,0.3); }
+        .file-label { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        #fileInput { display: none; }
+        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00f0ff; padding: 10px; border-radius: 5px; position: relative; background: rgba(0, 30, 50, 0.4); }
+        .file-info { font-size: 12px; color: #e1e1e1; display: flex; align-items: center; gap: 10px; }
+        .cancel-img { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #ff0055; cursor: pointer; font-weight: bold; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h1>ПАНЕЛЬ УПРАВЛЕНИЯ «ДЖИННИ»</h1>
+        <button id="voiceBtn" class="arc-btn">🎙️ АКТИВИРОВАТЬ ГОЛОС</button>
+        <div id="status" class="status">Система готова, сэр...</div>
+        <div id="chatLog" class="chat-log">
+            <div class="message msg-jinni">Когнитивный комплекс Джарвис активен. Готов к анализу таблиц Excel, смет в PDF, изображений и текстовых директив.</div>
+        </div>
+        <div id="previewBox" class="preview-box">
+            <div class="file-info">
+                <span id="fileIcon" style="font-size: 20px;">📄</span>
+                <span id="fileNameText">document.pdf</span>
+            </div>
+            <span id="cancelImg">❌ УДАЛИТЬ</span>
+        </div>
+        <div class="input-area">
+            <label for="fileInput" class="file-label">📎</label>
+            <input type="file" id="fileInput" accept="image/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/plain">
+            <input type="text" id="textInput" class="text-input" placeholder="Введите директиву вручную и нажмите Enter...">
+        </div>
+    </div>
+    <script>
+        const voiceBtn = document.getElementById('voiceBtn');
+        const statusText = document.getElementById('status');
+        const chatLog = document.getElementById('chatLog');
+        const textInput = document.getElementById('textInput');
+        const fileInput = document.getElementById('fileInput');
+        const previewBox = document.getElementById('previewBox');
+        const fileNameText = document.getElementById('fileNameText');
+        const fileIcon = document.getElementById('fileIcon');
+        const cancelImg = document.getElementById('cancelImg');
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let isSending = false; let attachedFileBase64 = null; let attachedFileName = null;
+
+        fileInput.onchange = () => {
+            const file = fileInput.files[0];
+            if (file) {
+                attachedFileName = file.name;
+                const ext = file.name.split('.').pop().toLowerCase();
+                if (['xlsx', 'xls'].includes(ext)) fileIcon.innerText = "📊 Excel";
+                else if (ext === 'pdf') fileIcon.innerText = "📕 PDF";
+                else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) fileIcon.innerText = "🖼️ Фото";
+                else fileIcon.innerText = "📄 Файл";
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    attachedFileBase64 = reader.result;
+                    fileNameText.innerText = file.name;
+                    previewBox.style.display = 'block';
+                    statusText.innerText = `Файл ${file.name} прикреплен.`;
+                };
+                reader.readAsDataURL(file);
+            }
+        };
+
+        cancelImg.onclick = () => {
+            attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none'; statusText.innerText = "Файл удален.";
+        };
+
+        // ⌨️ ОТПРАВКА ТЕКСТОМ (МЯГКИЙ РЕЖИМ — БЕЗ ЗВУКА)
+        textInput.onkeydown = (e) => {
+            if (e.key === 'Enter' && !isSending) {
+                const text = textInput.value.trim();
+                if (text || attachedFileBase64) {
+                    let displayMsg = text; if (attachedFileName) displayMsg += ` [Файл: ${attachedFileName}]`;
+                    appendMessage(displayMsg, 'user'); 
+                    executeCommand(text, attachedFileBase64, attachedFileName, "text"); 
+                    textInput.value = "";
+                }
+            }
+        };
+
+        // 🎙️ ОТПРАВКА ГОЛОСОМ (ПОЛНЫЙ РЕЖИМ — СО ЗВУКОМ)
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition(); recognition.lang = 'ru-RU';
+            voiceBtn.onclick = () => {
+                if (voiceBtn.classList.contains('recording')) { recognition.stop(); }
+                else {
+                    try { recognition.start(); statusText.innerText = "Слушаю вас, сэр..."; voiceBtn.classList.add('recording'); isSending = false; } catch (e) { console.error(e); }
+                }
+            };
+            recognition.onresult = (event) => {
+                if (isSending) return;
+                const resultText = event.results[0][0].transcript;
+                let displayMsg = resultText; if (attachedFileName) displayMsg += ` [Файл: ${attachedFileName}]`;
+                appendMessage(displayMsg, 'user'); 
+                executeCommand(resultText, attachedFileBase64, attachedFileName, "voice");
+            };
+            recognition.onend = () => { voiceBtn.classList.remove('recording'); };
+            recognition.onerror = () => { voiceBtn.classList.remove('recording'); };
+        }
+
+        function executeCommand(text, fileBase64, fileName, inputType) {
+            isSending = true; statusText.innerText = "Джинни обрабатывает данные..."; voiceBtn.classList.remove('recording');
+            const fBase64 = fileBase64; const fName = fileName;
+            attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
+            
+            fetch('/api/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: text, file_base64: fBase64, file_name: fName, input_type: inputType })
+            })
+            .then(res => res.json())
+            .then(data => {
+                statusText.innerText = "Система готова, сэр..."; 
+                appendMessage(data.reply, 'jinni');
+                
+                // Озвучиваем ТОЛЬКО если сервер подтвердил, что ввод был голосовым
+                if (data.should_speak) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(data.reply.replace(/\[.*?\]/g, ''));
+                    utterance.lang = 'ru-RU'; 
+                    window.speechSynthesis.speak(utterance);
+                }
+                isSending = false;
+            })
+            .catch(err => { 
+                statusText.innerText = "Системный сбой."; 
+                appendMessage("Критическая ошибка связи с ядром.", 'jinni'); 
+                isSending = false;
+            });
+        }
+
+        function appendMessage(text, sender) {
+            const msgDiv = document.createElement('div'); msgDiv.classList.add('message', sender === 'user' ? 'msg-user' : 'msg-jinni');
+            msgDiv.innerText = text; chatLog.appendChild(msgDiv); chatLog.scrollTop = chatLog.scrollHeight;
+        }
+    </script>
+
+
+</body></html>
