@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<!-- saved from url=(0024)http://72.56.84.16:9999/ -->
-<html lang="ru"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-    
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
     <title>Панель управления Джинни</title>
     <style>
         body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
@@ -47,6 +47,7 @@
             <input type="text" id="textInput" class="text-input" placeholder="Введите директиву вручную и нажмите Enter...">
         </div>
     </div>
+
     <script>
         const voiceBtn = document.getElementById('voiceBtn');
         const statusText = document.getElementById('status');
@@ -84,6 +85,25 @@
             attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none'; statusText.innerText = "Файл удален.";
         };
 
+        // Отображение сообщений в неоновом логе чата
+        function appendMessage(text, sender) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message msg-${sender}`;
+            msgDiv.innerText = text;
+            chatLog.appendChild(msgDiv);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        // Озвучивание ответов Джинни через Web Speech API
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ru-RU';
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
         // ⌨️ ОТПРАВКА ТЕКСТОМ (МЯГКИЙ РЕЖИМ — БЕЗ ЗВУКА)
         textInput.onkeydown = (e) => {
             if (e.key === 'Enter' && !isSending) {
@@ -117,42 +137,42 @@
             recognition.onerror = () => { voiceBtn.classList.remove('recording'); };
         }
 
+        // 🚀 ОТПРАВКА ДАННЫХ НА FASTAPI БЭКЕНД
         function executeCommand(text, fileBase64, fileName, inputType) {
-            isSending = true; statusText.innerText = "Джинни обрабатывает данные..."; voiceBtn.classList.remove('recording');
-            const fBase64 = fileBase64; const fName = fileName;
+            isSending = true; 
+            statusText.innerText = "Джинни обрабатывает данные..."; 
+            voiceBtn.classList.remove('recording');
+            
+            const payload = {
+                command: text,
+                file: fileBase64,
+                filename: fileName
+            };
+
+            // Сброс состояния прикрепленного файла для следующих команд
             attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
             
             fetch('/api/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: text, file_base64: fBase64, file_name: fName, input_type: inputType })
+                body: JSON.stringify(payload)
             })
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) throw new Error(`Ошибка сервера: ${res.status}`);
+                return res.json();
+            })
             .then(data => {
-                statusText.innerText = "Система готова, сэр..."; 
-                appendMessage(data.reply, 'jinni');
-                
-                // Озвучиваем ТОЛЬКО если сервер подтвердил, что ввод был голосовым
-                if (data.should_speak) {
-                    window.speechSynthesis.cancel();
-                    const utterance = new SpeechSynthesisUtterance(data.reply.replace(/\[.*?\]/g, ''));
-                    utterance.lang = 'ru-RU'; 
-                    window.speechSynthesis.speak(utterance);
+                // Разбор структуры {"response": reply} без риска получить undefined
+                if (data && data.response) {
+                    appendMessage(data.response, 'jinni');
+                    if (inputType === "voice") {
+                        speak(data.response);
+                    }
+                    statusText.innerText = "Система готова, сэр...";
+                } else {
+                    appendMessage("Ошибка: Сервер вернул пустой ответ или некорректный формат данных.", 'jinni');
+                    statusText.innerText = "Ошибка разбора ответа.";
                 }
-                isSending = false;
             })
-            .catch(err => { 
-                statusText.innerText = "Системный сбой."; 
-                appendMessage("Критическая ошибка связи с ядром.", 'jinni'); 
-                isSending = false;
-            });
-        }
-
-        function appendMessage(text, sender) {
-            const msgDiv = document.createElement('div'); msgDiv.classList.add('message', sender === 'user' ? 'msg-user' : 'msg-jinni');
-            msgDiv.innerText = text; chatLog.appendChild(msgDiv); chatLog.scrollTop = chatLog.scrollHeight;
-        }
-    </script>
-
-
-</body></html>
+            .catch(err => {
+                console.error(err);
