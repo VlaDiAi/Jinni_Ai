@@ -53,15 +53,18 @@ class AIAgentsPool:
         if file_data:
             user_content += f"\n\nДанные извлеченные из файла сметы:\n{file_data}"
 
-        response = await ai_client.chat.completions.create(
-            model="openai/gpt-5.4-nano",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.2
-        )
-        return response.choices.message.content
+        try:
+            response = await ai_client.chat.completions.create(
+                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.2
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"⚠️ Ошибка Агента-Сметчика при обращении к нейросети: {str(e)}"
 
     @staticmethod
     async def run_architect(context: str) -> str:
@@ -73,15 +76,18 @@ class AIAgentsPool:
             "конструктивные архитектурные рекомендации и идеи планировок для клиента."
         )
 
-        response = await ai_client.chat.completions.create(
-            model="openai/gpt-5.4-nano",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Разработай планировочное/архитектурное решение:\n{context}"}
-            ],
-            temperature=0.4
-        )
-        return response.choices.message.content
+        try:
+            response = await ai_client.chat.completions.create(
+                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Разработай планировочное/архитектурное решение:\n{context}"}
+                ],
+                temperature=0.4
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"⚠️ Ошибка Агента-Проектировщика при обращении к нейросети: {str(e)}"
 
     @staticmethod
     async def run_developer(user_instruction: str) -> str:
@@ -111,7 +117,7 @@ class AIAgentsPool:
 
         try:
             response = await ai_client.chat.completions.create(
-                model="openai/gpt-5.4-nano",
+                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
@@ -119,7 +125,7 @@ class AIAgentsPool:
                 temperature=0.1
             )
             
-            new_code = response.choices.message.content.strip()
+            new_code = response.choices[0].message.content.strip()
 
             # Очистка от случайных markdown-тегов
             if new_code.startswith("```"):
@@ -188,20 +194,26 @@ class AIOrchestrator:
 
         # 5. ДЕФОЛТНЫЙ СЦЕНАРИЙ: Общий ответ Джинни (Когнитивный блок Джарвис)
         else:
-            response = await ai_client.chat.completions.create(
-                model="openai/gpt-5.4-nano",
-                messages=[
-                    {"role": "system", "content": "Ты Джинни, ИИ-ассистент MONOLIT-MOS. Ответь клиенту емко, профессионально и внятно."},
-                    {"role": "user", "content": command}
-                ]
-            )
-            return response.choices.message.content
+            try:
+                response = await ai_client.chat.completions.create(
+                    model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
+                    messages=[
+                        {"role": "system", "content": "Ты Джинни, ИИ-ассистент MONOLIT-MOS. Ответь клиенту емко, профессионально и внятно."},
+                        {"role": "user", "content": command}
+                    ]
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                return f"⚠️ Ошибка дефолтного сценария ИИ: {str(e)}"
 
 # ==========================================
 # 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
 # ==========================================
 
 @app.post("/api/command")
+# ==========================================
+# 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
+# ==========================================
 async def handle_command(request: CommandRequest):
     try:
         extracted_file_text = ""
@@ -210,56 +222,14 @@ async def handle_command(request: CommandRequest):
         if request.file and request.filename:
             raw_file_str = request.file
             if "," in raw_file_str:
-                raw_file_str = raw_file_str.split(",")[1]
+                parts = raw_file_str.split(",")
+                if len(parts) > 1:
+                    raw_file_str = parts[1]  # ИСПРАВЛЕНО: строго берем чистый Base64 после запятой
                 
             file_bytes = base64.b64decode(raw_file_str)
             fname = request.filename.lower()
             
-            # Извлечение текста из PDF
-            if fname.endswith('.pdf'):
-                pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-# ==========================================
-# 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
-# ==========================================
-
-@app.post("/api/command")
-async def handle_command(request: CommandRequest):
-    try:
-        extracted_file_text = ""
-        
-        # Разбор Base64-файла из скрепки 📎 фронтенда
-        if request.file and request.filename:
-            raw_file_str = request.file
-            if "," in raw_file_str:
-                raw_file_str = raw_file_str.split(",")[1]  # Исправлено: берем чистый base64 после запятой
-                
-            file_bytes = base64.b64decode(raw_file_str)
-            fname = request.filename.lower()
-            
-            # Извлечение текста из PDF
+            # Извлечение текста из PDF смет
             if fname.endswith('.pdf'):
                 pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
                 extracted_file_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
-            
-            # Извлечение данных из Excel-таблиц
-            elif fname.endswith(('.xlsx', '.xls')):
-                workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-                for sheet in workbook.worksheets:
-                    extracted_file_text += f"\n--- Лист: {sheet.title} ---\n"
-                    for row in sheet.iter_rows(values_only=True):
-                        cell_values = [str(cell).strip() for cell in row if cell is not None]
-                        if cell_values:
-                            extracted_file_text += " | ".join(cell_values) + "\n"
-
-        # Передача очищенных данных в Оркестратор для выбора агентов
-        reply = await AIOrchestrator.route_and_execute(
-            command=request.command,
-            file_text=extracted_file_text,
-            filename=request.filename or ""
-        )
-        
-        return {"response": reply}
-
-    except Exception as e:
-        # Безопасное логирование критических ошибок без падения сервера
-        return {"response": f"⚠️ Произошел сбой в ядре Оркестратора. Ошибка: {str(e)}"}
