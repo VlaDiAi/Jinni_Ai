@@ -61,8 +61,9 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let isSending = false; let attachedFileBase64 = null; let attachedFileName = null;
 
+        // ИСПРАВЛЕНО: Строго берем первый элемент [0] из массива прикрепленных файлов
         fileInput.onchange = () => {
-            const file = fileInput.files[0];
+            const file = fileInput.files[0]; 
             if (file) {
                 attachedFileName = file.name;
                 const ext = file.name.split('.').pop().toLowerCase();
@@ -85,7 +86,6 @@
             attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none'; statusText.innerText = "Файл удален.";
         };
 
-        // Отображение сообщений в неоновом логе чата
         function appendMessage(text, sender) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message msg-${sender}`;
@@ -94,7 +94,6 @@
             chatLog.scrollTop = chatLog.scrollHeight;
         }
 
-        // Озвучивание ответов Джинни через Web Speech API
         function speak(text) {
             if ('speechSynthesis' in window) {
                 window.speechSynthesis.cancel();
@@ -104,7 +103,6 @@
             }
         }
 
-        // ⌨️ ОТПРАВКА ТЕКСТОМ (МЯГКИЙ РЕЖИМ — БЕЗ ЗВУКА)
         textInput.onkeydown = (e) => {
             if (e.key === 'Enter' && !isSending) {
                 const text = textInput.value.trim();
@@ -117,7 +115,6 @@
             }
         };
 
-        // 🎙️ ОТПРАВКА ГОЛОСОМ (ПОЛНЫЙ РЕЖИМ — СО ЗВУКОМ)
         if (SpeechRecognition) {
             const recognition = new SpeechRecognition(); recognition.lang = 'ru-RU';
             voiceBtn.onclick = () => {
@@ -137,7 +134,6 @@
             recognition.onerror = () => { voiceBtn.classList.remove('recording'); };
         }
 
-        // 🚀 ОТПРАВКА ДАННЫХ НА FASTAPI БЭКЕНД
         function executeCommand(text, fileBase64, fileName, inputType) {
             isSending = true; 
             statusText.innerText = "Джинни обрабатывает данные..."; 
@@ -149,7 +145,6 @@
                 filename: fileName
             };
 
-            // Сброс состояния прикрепленного файла для следующих команд
             attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
             
             fetch('/api/command', {
@@ -162,7 +157,6 @@
                 return res.json();
             })
             .then(data => {
-                // Разбор структуры {"response": reply} без риска получить undefined
                 if (data && data.response) {
                     appendMessage(data.response, 'jinni');
                     if (inputType === "voice") {
@@ -176,3 +170,13 @@
             })
             .catch(err => {
                 console.error(err);
+                appendMessage(`Сбой связи: ${err.message}`, 'jinni');
+                statusText.innerText = "Сбой операции.";
+            })
+            .finally(() => {
+                isSending = false;
+            });
+        }
+    </script>
+</body>
+</html>
