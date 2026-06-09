@@ -218,3 +218,48 @@ async def handle_command(request: CommandRequest):
             # Извлечение текста из PDF
             if fname.endswith('.pdf'):
                 pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+# ==========================================
+# 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
+# ==========================================
+
+@app.post("/api/command")
+async def handle_command(request: CommandRequest):
+    try:
+        extracted_file_text = ""
+        
+        # Разбор Base64-файла из скрепки 📎 фронтенда
+        if request.file and request.filename:
+            raw_file_str = request.file
+            if "," in raw_file_str:
+                raw_file_str = raw_file_str.split(",")[1]  # Исправлено: берем чистый base64 после запятой
+                
+            file_bytes = base64.b64decode(raw_file_str)
+            fname = request.filename.lower()
+            
+            # Извлечение текста из PDF
+            if fname.endswith('.pdf'):
+                pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                extracted_file_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
+            
+            # Извлечение данных из Excel-таблиц
+            elif fname.endswith(('.xlsx', '.xls')):
+                workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                for sheet in workbook.worksheets:
+                    extracted_file_text += f"\n--- Лист: {sheet.title} ---\n"
+                    for row in sheet.iter_rows(values_only=True):
+                        cell_values = [str(cell).strip() for cell in row if cell is not None]
+                        if cell_values:
+                            extracted_file_text += " | ".join(cell_values) + "\n"
+
+        # Передача очищенных данных в Оркестратор для выбора агентов
+        reply = await AIOrchestrator.route_and_execute(
+            command=request.command,
+            file_text=extracted_file_text,
+            filename=request.filename or ""
+        )
+        
+        return {"response": reply}
+
+    except Exception as e:
+        # Безопасное логирование критических ошибок без падения сервера
+        return {"response": f"⚠️ Произошел сбой в ядре Оркестратора. Ошибка: {str(e)}"}
