@@ -124,8 +124,8 @@ class AIAgentsPool:
             # Очистка от случайных markdown-тегов
             if new_code.startswith("```"):
                 lines = new_code.splitlines()
-                if lines[0].startswith("```"): lines.pop(0)
-                if lines[-1].startswith("```"): lines.pop()
+                if lines and lines[0].startswith("```"): lines.pop(0)
+                if lines and lines[-1].startswith("```"): lines.pop()
                 new_code = "\n".join(lines).strip()
 
             # ВАЛИДАЦИЯ: Защита от повреждения бэкенда синтаксическими ошибками Python
@@ -135,7 +135,7 @@ class AIAgentsPool:
                 except SyntaxError as e:
                     return f"❌ Авто-обновление отклонено! Обнаружена синтаксическая ошибка на строке {e.lineno}: {e.msg}"
 
-            # Запись модифицированного кода (Uvicorn с флагом --reload подхватит изменения на лету)
+            # Запись модифицированного кода
             with open(target_file, "w", encoding="utf-8") as f:
                 f.write(new_code)
 
@@ -143,7 +143,6 @@ class AIAgentsPool:
             try:
                 subprocess.run(["git", "add", target_file], check=True, capture_output=True)
                 subprocess.run(["git", "commit", "-m", f"🤖 Джинни: Автоматическое обновление {target_file}"], check=True, capture_output=True)
-                # Предполагается, что на сервере настроены SSH-ключи или сохранен токен доступа к Гитхабу
                 subprocess.run(["git", "push", "origin", "main"], check=True, capture_output=True)
                 git_status = "и успешно отправлен в GitHub-репозиторий (git push)."
             except Exception as git_err:
@@ -170,7 +169,6 @@ class AIOrchestrator:
 
         # 2. МУЛЬТИАГЕНТНЫЙ СЦЕНАРИЙ (И смета/цены, и планировка/дом одновременно)
         elif ("смет" in cmd_lower or "цена" in cmd_lower or is_file_present) and ("проект" in cmd_lower or "план" in cmd_lower or "дом" in cmd_lower):
-            # Асинхронный параллельный запуск для максимального сокращения задержки
             task_estimate = AIAgentsPool.run_estimator(command, file_text)
             task_project = AIAgentsPool.run_architect(command)
             est_reply, arch_reply = await asyncio.gather(task_estimate, task_project)
@@ -209,11 +207,10 @@ async def handle_command(request: CommandRequest):
         extracted_file_text = ""
         
         # Разбор Base64-файла из скрепки 📎 фронтенда
-                # Разбор Base64-файла из скрепки 📎 фронтенда
         if request.file and request.filename:
             raw_file_str = request.file
             if "," in raw_file_str:
-                raw_file_str = raw_file_str.split(",")[1] # Исправлено: берем чистый base64 после запятой
+                raw_file_str = raw_file_str.split(",")[1]
                 
             file_bytes = base64.b64decode(raw_file_str)
             fname = request.filename.lower()
@@ -221,24 +218,3 @@ async def handle_command(request: CommandRequest):
             # Извлечение текста из PDF
             if fname.endswith('.pdf'):
                 pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                extracted_file_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
-            
-            # Извлечение данных из Excel-таблиц
-            elif fname.endswith(('.xlsx', '.xls')):
-                workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-                for sheet in workbook.worksheets:
-                    extracted_file_text += f"\n--- Лист: {sheet.title} ---\n"
-                    for row in sheet.iter_rows(values_only=True):
-                        cell_values = [str(cell).strip() for cell in row if cell is not None]
-                        if cell_values:
-                            extracted_file_text += " | ".join(cell_values) + "\n"
-
-        # Передача очищенных данных в Оркестратор для выбора агентов
-        reply = await AIOrchestrator.route_and_execute(
-            command=request.command,
-            file_text=extracted_file_text,
-            filename=request.filename or ""
-        )
-        
-        return {"response": reply}
-
