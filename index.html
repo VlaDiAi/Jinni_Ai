@@ -47,7 +47,6 @@
             <input type="text" id="textInput" class="text-input" placeholder="Введите директиву вручную и нажмите Enter...">
         </div>
     </div>
-
     <script>
         const voiceBtn = document.getElementById('voiceBtn');
         const statusText = document.getElementById('status');
@@ -61,7 +60,6 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let isSending = false; let attachedFileBase64 = null; let attachedFileName = null;
 
-        // ИСПРАВЛЕНО: Строго берем первый элемент [0] из массива прикрепленных файлов
         fileInput.onchange = () => {
             const file = fileInput.files[0]; 
             if (file) {
@@ -97,9 +95,11 @@
         function speak(text) {
             if ('speechSynthesis' in window) {
                 window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'ru-RU';
-                window.speechSynthesis.speak(utterance);
+                if (typeof SpeechSynthesisUtterance !== 'undefined') {
+                    const u = new SpeechSynthesisUtterance(text);
+                    u.lang = 'ru-RU';
+                    window.speechSynthesis.speak(u);
+                }
             }
         }
 
@@ -125,7 +125,7 @@
             };
             recognition.onresult = (event) => {
                 if (isSending) return;
-                const resultText = event.results[0][0].transcript;
+                const resultText = event.results[0][0].transcript; 
                 let displayMsg = resultText; if (attachedFileName) displayMsg += ` [Файл: ${attachedFileName}]`;
                 appendMessage(displayMsg, 'user'); 
                 executeCommand(resultText, attachedFileBase64, attachedFileName, "voice");
@@ -147,7 +147,7 @@
 
             attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
             
-            fetch('/api/command', {
+            fetch('http://72.56.84', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -170,7 +170,7 @@
             })
             .catch(err => {
                 console.error(err);
-                appendMessage(`Сбой связи: ${err.message}`, 'jinni');
+                appendMessage(`Критическая ошибка связи с ядром: ${err.message}`, 'jinni');
                 statusText.innerText = "Сбой операции.";
             })
             .finally(() => {
