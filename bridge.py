@@ -21,8 +21,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-FRONTEND_FILE = os.path.join(os.path.dirname(__file__), "index.html")
-KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "jinni_knowledge")
+def find_frontend_path():
+    for path in ["index.html", "/app/index.html", "./index.html", "VladAI/Jinni-AI-Assistant/index.html"]:
+        if os.path.exists(path):
+            return path
+    return "index.html"
+
+FRONTEND_FILE = find_frontend_path()
+KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "/app/jinni_knowledge"
+
 
 
 class CommandRequest(BaseModel):
