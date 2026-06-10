@@ -6,69 +6,65 @@ from pydantic import BaseModel
 import httpx
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("JinniBridge")
+logger = logging.getLogger("JinniOrchestrator")
 
-app = FastAPI(title="Jinni AI Assistant")
+app = FastAPI(title="MONOLIT-MOS AI Orchestrator (Jarvis)")
 
-# Пути к фронтенду и базе знаний
 FRONTEND_FILE = os.path.join(os.path.dirname(__file__), "index.html")
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "jinni_knowledge")
 
 class CommandRequest(BaseModel):
     command: str
 
-# 1. Функция сборки RAG-контекста из твоей базы знаний
-def get_rag_context() -> str:
+# 1. СБОРКА БАЗЫ ЗНАНИЙ ДЛЯ ВСЕХ ОТДЕЛОВ (RAG)
+def get_multi_agent_context() -> str:
     context = ""
     try:
         if os.path.exists(KNOWLEDGE_DIR):
-            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
+            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt", "engineering_specs.txt", "design_rules.txt"]:
                 file_path = os.path.join(KNOWLEDGE_DIR, file_name)
                 if os.path.exists(file_path):
                     with open(file_path, "r", encoding="utf-8") as f:
-                        context += f"\n--- {file_name} ---\n" + f.read()
-        logger.info("RAG-контекст успешно собран.")
+                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n" + f.read()
     except Exception as e:
-        logger.error(f"Ошибка при сборке RAG-контекста: {e}")
-    return context or "Данные компании MONOLIT-MOS загружаются."
+        logger.error(f"Ошибка RAG: {e}")
+    return context or "Системные протоколы MONOLIT-MOS загружены."
 
-# 2. Роутинг главной страницы (УБИРАЕТ БЕЛЫЙ ЭКРАН)
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     if os.path.exists(FRONTEND_FILE):
         return FileResponse(FRONTEND_FILE)
-    logger.error(f"Фронтенд не найден по пути: {FRONTEND_FILE}")
-    return HTMLResponse(content="<h1>Критическая ошибка: index.html не найден в корне репозитория!</h1>", status_code=404)
+    return HTMLResponse(content="<h1>Ошибка: index.html не найден в корне!</h1>", status_code=404)
 
-# 3. Исправленный эндпоинт /api/command под POST-запросы фронтенда
+# 2. ТОЧКА ВХОДА ГЛАВНОГО ОРКЕСТРАТОРА
 @app.post("/api/command")
 async def handle_command(payload: CommandRequest):
-    # Токен ИИ-шлюза, проброшенный в переменные Timeweb Cloud App Platform
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        logger.error("Переменная OPENAI_API_KEY отсутствует в окружении.")
-        raise HTTPException(status_code=500, detail="Ошибка конфигурации: отсутствует API-ключ")
+        raise HTTPException(status_code=500, detail="Missing OPENAI_API_KEY")
 
     user_query = payload.command
-    logger.info(f"Запрос от пользователя: {user_query}")
+    logger.info(f"📍 Оркестратор Jarvis получил глобальную задачу: {user_query}")
 
-    rag_context = get_rag_context()
+    company_context = get_multi_agent_context()
 
+    # СИСТЕМНАЯМАТРИЦА ОРКЕСТРАТОРА (CEO)
     system_prompt = (
-        "Ты — Джинни (Проект Джарвис), ИИ-ассистент компании MONOLIT-MOS.\n"
-        "Консультируй клиентов по ценам и закрывай их на бесплатный замер.\n"
-        "У нас 10 лет гарантии. Используй только актуальные данные.\n"
-        f"База знаний MONOLIT-MOS:\n{rag_context}"
+        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) цифровой экосистемы MONOLIT-MOS.\n"
+        "В твоем прямом подчинении находятся специализированные ИИ-агенты:\n"
+        "1. ИИ-Сметчик (анализ PDF/Excel, расчет стоимости материалов и работ).\n"
+        "2. ИИ-Проектировщик (архитектурные решения, конструктив, планировки домов).\n"
+        "3. ИИ-Дизайнер (интерьеры, неоновые стили, фасадные решения).\n"
+        "4. ИИ-Мебельщик (встроенные решения, кухни, спецификации).\n"
+        "5. ИИ-Интегратор (управление кодом системы через GitHub API и CRM Битрикс24).\n\n"
+        "ТВОЯ ЗАДАЧА:\n"
+        "Принимать комплексные задачи от Влада, распределять их между своими суб-агентами, контролировать выполнение, при необходимости генерировать код или инструкции для обновления системы, и выдавать Владу идеальный консолидированный результат.\n\n"
+        f"Глобальный контекст экосистемы MONOLIT-MOS:\n{company_context}"
     )
 
-    # ОФИЦИАЛЬНЫЙ ШЛЮЗ TIMEWEB CLOUD AI GATEWAY (OpenAI-совместимый формат)
     timeweb_gateway_url = "https://timeweb.cloud"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    
     data = {
         "model": "gpt-4o", 
         "messages": [
@@ -78,20 +74,13 @@ async def handle_command(payload: CommandRequest):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=40.0) as client:
             response = await client.post(timeweb_gateway_url, headers=headers, json=data)
-            
             if response.status_code != 200:
-                logger.error(f"Шлюз ИИ вернул ошибку {response.status_code}: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail="Ошибка обработки запроса шлюзом ИИ")
+                raise HTTPException(status_code=response.status_code, detail="AI Gateway Error")
 
             ai_response = response.json()
-            reply_text = ai_response["choices"]["message"]["content"]
-            return {"status": "success", "response": reply_text}
-
-    except httpx.RequestError as e:
-        logger.error(f"Сетевой сбой шлюза: {e}")
-        raise HTTPException(status_code=502, detail="Сетевой сбой при связи с ИИ-сервером")
+            return {"status": "success", "response": ai_response["choices"]["message"]["content"]}
     except Exception as e:
-        logger.error(f"Ошибка бэкенда: {e}")
+        logger.error(f"Ошибка оркестрации: {e}")
         raise HTTPException(status_code=500, detail=str(e))
