@@ -1,235 +1,105 @@
 import os
-import io
-import ast
-import base64
-import asyncio
-import subprocess
-import pypdf
-import openpyxl
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+import logging
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional
-import openai
+import httpx
 
-# Инициализация асинхронного клиента OpenAI через шлюз Timeweb
-# Токен OPENAI_API_KEY берется строго из переменных окружения стенда "Brainy Pheasant"
-ai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# 1. ЛОГИРОВАНИЕ И ИНИЦИАЛИЗАЦИЯ
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("JinniBridge")
 
-app = FastAPI(title="MONOLIT-MOS AI Core - Jinni")
+app = FastAPI(title="Jinni AI Assistant Jarvis")
 
-# Настройка CORS, чтобы фронтенд мог беспрепятственно общаться с бэкендом
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Пути к файлам базы знаний (RAG) и фронтенду
+KNOWLEDGE_DIR = "jinni_knowledge"
+FRONTEND_FILE = "index.html"
 
-# Модель входящего JSON-запроса от обновленного index.html
+# 2. СБОРКА КОНТЕКСТА ИЗ БАЗЫ ЗНАНИЙ (RAG)
+def get_rag_context() -> str:
+    context = ""
+    try:
+        if os.path.exists(KNOWLEDGE_DIR):
+            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
+                file_path = os.path.join(KNOWLEDGE_DIR, file_name)
+                if os.path.exists(file_path):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        context += f"\n--- {file_name} ---\n" + f.read()
+        logger.info("RAG-контекст успешно собран.")
+    except Exception as e:
+        logger.error(f"Ошибка при сборке RAG-контекста: {e}")
+    return context or "Данные о компании отсутствуют."
+
+# 3. МОДЕЛИ ДАННЫХ ДЛЯ ОБРАБОТКИ ФРОНТЕНДА
 class CommandRequest(BaseModel):
     command: str
-    file: Optional[str] = None      # Base64 строка файла (при наличии скрепки 📎)
-    filename: Optional[str] = None  # Имя файла для автоматического роутинга
 
-# ==========================================
-# 🤖 СЛУЖБА МУЛЬТИАГЕНТНЫХ ИИ-СИСТЕМ
-# ==========================================
+# 4. СЕРВИС ГЛАВНОЙ СТРАНИЦЫ (УБИРАЕТ БЕЛЫЙ ЭКРАН)
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    if os.path.exists(FRONTEND_FILE):
+        return FileResponse(FRONTEND_FILE)
+    raise HTTPException(status_code=404, detail="Файл фронтенда index.html не найден в корне!")
 
-class AIAgentsPool:
-    @staticmethod
-    async def run_estimator(context: str, file_data: str = "") -> str:
-        """Агент №1: ИИ-Сметчик (Аудит цен, объемов и привязка к 10 годам гарантии)"""
-        system_prompt = (
-            "Ты — Старший ИИ-Сметчик компании MONOLIT-MOS. Твоя специализация — детальный аудит строительных смет, "
-            "расчет объемов бетона, арматуры, опалубки и земляных работ. Ты сверяешь данные с внутренними "
-            "регламентами (база знаний: 10 лет гарантии на монолитные конструкции). Ты жестко выявляешь "
-            "завышения цен субподрядчиками и скрытые накрутки. Выдавай экспертный ответ с разбивкой по позициям, "
-            "без лишней воды, в строгом инженерном стиле."
-        )
-        
-        user_content = f"Директива от руководства: {context}"
-        if file_data:
-            user_content += f"\n\nДанные извлеченные из файла сметы:\n{file_data}"
-
-        try:
-            response = await ai_client.chat.completions.create(
-                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                temperature=0.2
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"⚠️ Ошибка Агента-Сметчика при обращении к нейросети: {str(e)}"
-
-    @staticmethod
-    async def run_architect(context: str) -> str:
-        """Агент №2: Планировщик-Проектировщик (Архитектура, эргономика, ТЗ на дом)"""
-        system_prompt = (
-            "Ты — Главный Архитектор-Проектировщик загородных домов в MONOLIT-MOS. Твоя специализация — планировочные "
-            "решения, посадка монолитных и каменных зданий на участок, эргономика помещений, этажность и формирование ТЗ. "
-            "Ты предлагаешь решения, оптимизирующие прочность каркаса под гарантию 10 лет. Давай четкие, "
-            "конструктивные архитектурные рекомендации и идеи планировок для клиента."
-        )
-
-        try:
-            response = await ai_client.chat.completions.create(
-                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Разработай планировочное/архитектурное решение:\n{context}"}
-                ],
-                temperature=0.4
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"⚠️ Ошибка Агента-Проектировщика при обращении к нейросети: {str(e)}"
-
-    @staticmethod
-    async def run_developer(user_instruction: str) -> str:
-        """Агент №3: ИИ-Девелопер (Автоматическое изменение кода системы и Git Push)"""
-        target_file = "bridge.py"
-        if "фронт" in user_instruction.lower() or "index.html" in user_instruction.lower():
-            target_file = "index.html"
-
-        if not os.path.exists(target_file):
-            return f"❌ Файл {target_file} не найден на сервере."
-
-        with open(target_file, "r", encoding="utf-8") as f:
-            current_code = f.read()
-
-        system_prompt = (
-            f"Ты — ИИ-Инженер автоматизации Джинни. Твоя задача — модифицировать код файла {target_file}.\n"
-            "Ты обязан возвращать ВЕСЬ код файла целиком, без сокращений, пропусков или комментариев вроде '// прежний код'. "
-            "Код должен компилироваться без ошибок.\n"
-            "ВАЖНО: Возвращай только чистый код. Никакого пояснительного текста до или после кода, никаких markdown-оберток (```)."
-        )
-
-        user_content = (
-            f"Текущий рабочий код {target_file}:\n\n{current_code}\n\n"
-            f"Инструкция по обновлению: {user_instruction}\n\n"
-            f"Выдай обновленный код целиком:"
-        )
-
-        try:
-            response = await ai_client.chat.completions.create(
-                model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                temperature=0.1
-            )
-            
-            new_code = response.choices[0].message.content.strip()
-
-            # Очистка от случайных markdown-тегов
-            if new_code.startswith("```"):
-                lines = new_code.splitlines()
-                if lines and lines[0].startswith("```"): lines.pop(0)
-                if lines and lines[-1].startswith("```"): lines.pop()
-                new_code = "\n".join(lines).strip()
-
-            # ВАЛИДАЦИЯ: Защита от повреждения бэкенда синтаксическими ошибками Python
-            if target_file == "bridge.py":
-                try:
-                    ast.parse(new_code)
-                except SyntaxError as e:
-                    return f"❌ Авто-обновление отклонено! Обнаружена синтаксическая ошибка на строке {e.lineno}: {e.msg}"
-
-            # Запись модифицированного кода
-            with open(target_file, "w", encoding="utf-8") as f:
-                f.write(new_code)
-
-            # АВТОМАТИЗАЦИЯ GIT: Синхронизация изменений локального сервера с GitHub репозиторием
-            try:
-                subprocess.run(["git", "add", target_file], check=True, capture_output=True)
-                subprocess.run(["git", "commit", "-m", f"🤖 Джинни: Автоматическое обновление {target_file}"], check=True, capture_output=True)
-                subprocess.run(["git", "push", "origin", "main"], check=True, capture_output=True)
-                git_status = "и успешно отправлен в GitHub-репозиторий (git push)."
-            except Exception as git_err:
-                git_status = f"но произошел сбой синхронизации с Git: {str(git_err)}. Проверьте права доступа."
-
-            return f"✅ Код файла `{target_file}` успешно обновлен, применен на сервере {git_status}"
-
-        except Exception as err:
-            return f"❌ Сбой при выполнении авто-модификации кода: {str(err)}"
-
-# ==========================================
-# 🎛️ ЦЕНТРАЛЬНЫЙ ОРКЕСТРАТОР СИСТЕМЫ
-# ==========================================
-
-class AIOrchestrator:
-    @staticmethod
-    async def route_and_execute(command: str, file_text: str, filename: str) -> str:
-        cmd_lower = command.lower()
-        is_file_present = len(file_text) > 0
-        
-        # 1. ТРИГГЕР ДЛЯ АГЕНТА-ДЕВЕЛОПЕРА (Задачи на изменение или обновление кода)
-        if "измени код" in cmd_lower or "обнови код" in cmd_lower or "перепиши" in cmd_lower or "добавь в код" in cmd_lower:
-            return await AIAgentsPool.run_developer(command)
-
-        # 2. МУЛЬТИАГЕНТНЫЙ СЦЕНАРИЙ (И смета/цены, и планировка/дом одновременно)
-        elif ("смет" in cmd_lower or "цена" in cmd_lower or is_file_present) and ("проект" in cmd_lower or "план" in cmd_lower or "дом" in cmd_lower):
-            task_estimate = AIAgentsPool.run_estimator(command, file_text)
-            task_project = AIAgentsPool.run_architect(command)
-            est_reply, arch_reply = await asyncio.gather(task_estimate, task_project)
-            
-            return (
-                f"### 📐 АРХИТЕКТУРНОЕ РЕШЕНИЕ:\n{arch_reply}\n\n"
-                f"### 📊 СМЕТНЫЙ АУДИТ:\n{est_reply}"
-            )
-
-        # 3. СЦЕНАРИЙ ДЛЯ АГЕНТА-СМЕТЧИКА (Файлы Excel/PDF или денежные вопросы)
-        elif is_file_present or "смет" in cmd_lower or "стоимост" in cmd_lower or "цена" in cmd_lower or "рубл" in cmd_lower:
-            return await AIAgentsPool.run_estimator(command, file_text)
-
-        # 4. СЦЕНАРИЙ ДЛЯ АГЕНТА-ПРОЕКТИРОВЩИКА (Конструктив, этажи, комнаты, участки)
-        elif "план" in cmd_lower or "проект" in cmd_lower or "дом" in cmd_lower or "комнат" in cmd_lower or "этаж" in cmd_lower or "фундамент" in cmd_lower:
-            return await AIAgentsPool.run_architect(command)
-
-        # 5. ДЕФОЛТНЫЙ СЦЕНАРИЙ: Общий ответ Джинни (Когнитивный блок Джарвис)
-        else:
-            try:
-                response = await ai_client.chat.completions.create(
-                    model="gpt-4o-mini", # Исправлено: валидная рабочая модель шлюза
-                    messages=[
-                        {"role": "system", "content": "Ты Джинни, ИИ-ассистент MONOLIT-MOS. Ответь клиенту емко, профессионально и внятно."},
-                        {"role": "user", "content": command}
-                    ]
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                return f"⚠️ Ошибка дефолтного сценария ИИ: {str(e)}"
-
-# ==========================================
-# 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
-# ==========================================
-
+# 5. НОВЫЙ ИСПРАВЛЕННЫЙ ЭНДПОИНТ /api/command (СТАТУС 200 OK)
 @app.post("/api/command")
-# ==========================================
-# 🌐 FastAPI ЭНДПОИНТЫ И ПАРСИНГ ФАЙЛОВ
-# ==========================================
-async def handle_command(request: CommandRequest):
+async def handle_command(payload: CommandRequest):
+    # Извлекаем глобальный токен OpenAI из окружения Timeweb Cloud
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("Критическая ошибка: Переменная OPENAI_API_KEY не найдена.")
+        raise HTTPException(status_code=500, detail="Конфигурация сервера сломана: отсутствует API_KEY")
+
+    user_query = payload.command
+    logger.info(f"Получена команда от пользователя: {user_query}")
+
+    # Собираем контекст на лету
+    rag_context = get_rag_context()
+
+    # Формируем системный промпт Джинни (Проект Джарвис)
+    system_prompt = (
+        "Ты — Джинни (Проект Джарвис), ИИ-ассистент компании MONOLIT-MOS.\n"
+        "Твоя цель — консультировать клиентов по ценам и закрывать их на бесплатный замер.\n"
+        "У нас 10 лет гарантии. Используй только актуальные данные из базы знаний.\n"
+        f"Контекст компании:\n{rag_context}"
+    )
+
+    # ИНФРАСТРУКТУРНЫЙ МАНЕВР: ОФИЦИАЛЬНЫЙ ШЛЮЗ TIMEWEB CLOUD
+    timeweb_ai_gateway = "https://timeweb.cloud" # Либо актуальный внутренний эндпоинт провайдера
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    # Пакет данных для ИИ шлюза
+    data = {
+        "model": "gpt-4o",  # Или актуальная модель шлюза Timeweb
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_query}
+        ]
+    }
+
     try:
-        extracted_file_text = ""
-        
-        # Разбор Base64-файла из скрепки 📎 фронтенда
-        if request.file and request.filename:
-            raw_file_str = request.file
-            if "," in raw_file_str:
-                parts = raw_file_str.split(",")
-                if len(parts) > 1:
-                    raw_file_str = parts[1]  # ИСПРАВЛЕНО: строго берем чистый Base64 после запятой
-                
-            file_bytes = base64.b64decode(raw_file_str)
-            fname = request.filename.lower()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(timeweb_ai_gateway, headers=headers, json=data)
             
-            # Извлечение текста из PDF смет
-            if fname.endswith('.pdf'):
+            if response.status_code != 200:
+                logger.error(f"Шлюз ИИ вернул ошибку {response.status_code}: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail="Ошибка шлюза искусственного интеллекта")
+
+            ai_response = response.json()
+            reply_text = ai_response["choices"][0]["message"]["content"]
+            return {"status": "success", "response": reply_text}
+
+    except httpx.RequestError as e:
+        logger.error(f"Сетевая ошибка при запросе к ИИ-шлюзу: {e}")
+        raise HTTPException(status_code=502, detail="Не удалось связаться с ИИ-сервером")
+    except Exception as e:
+        logger.error(f"Непредвиденная ошибка бэкенда: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
                 pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
                 extracted_file_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
