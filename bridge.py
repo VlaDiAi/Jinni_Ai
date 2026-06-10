@@ -1,22 +1,23 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import httpx
 
-# 1. ЛОГИРОВАНИЕ И ИНИЦИАЛИЗАЦИЯ
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("JinniBridge")
 
-app = FastAPI(title="Jinni AI Assistant Jarvis")
+app = FastAPI(title="Jinni AI Assistant")
 
-# Пути к файлам базы знаний (RAG) и фронтенду
-KNOWLEDGE_DIR = "jinni_knowledge"
-FRONTEND_FILE = "index.html"
+# Пути к фронтенду и базе знаний
+FRONTEND_FILE = os.path.join(os.path.dirname(__file__), "index.html")
+KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "jinni_knowledge")
 
-# 2. СБОРКА КОНТЕКСТА ИЗ БАЗЫ ЗНАНИЙ (RAG)
+class CommandRequest(BaseModel):
+    command: str
+
+# 1. Функция сборки RAG-контекста из твоей базы знаний
 def get_rag_context() -> str:
     context = ""
     try:
@@ -29,53 +30,47 @@ def get_rag_context() -> str:
         logger.info("RAG-контекст успешно собран.")
     except Exception as e:
         logger.error(f"Ошибка при сборке RAG-контекста: {e}")
-    return context or "Данные о компании отсутствуют."
+    return context or "Данные компании MONOLIT-MOS загружаются."
 
-# 3. МОДЕЛИ ДАННЫХ ДЛЯ ОБРАБОТКИ ФРОНТЕНДА
-class CommandRequest(BaseModel):
-    command: str
-
-# 4. СЕРВИС ГЛАВНОЙ СТРАНИЦЫ (УБИРАЕТ БЕЛЫЙ ЭКРАН)
+# 2. Роутинг главной страницы (УБИРАЕТ БЕЛЫЙ ЭКРАН)
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     if os.path.exists(FRONTEND_FILE):
         return FileResponse(FRONTEND_FILE)
-    raise HTTPException(status_code=404, detail="Файл фронтенда index.html не найден в корне!")
+    logger.error(f"Фронтенд не найден по пути: {FRONTEND_FILE}")
+    return HTMLResponse(content="<h1>Критическая ошибка: index.html не найден в корне репозитория!</h1>", status_code=404)
 
-# 5. НОВЫЙ ИСПРАВЛЕННЫЙ ЭНДПОИНТ /api/command (СТАТУС 200 OK)
+# 3. Исправленный эндпоинт /api/command под POST-запросы фронтенда
 @app.post("/api/command")
 async def handle_command(payload: CommandRequest):
-    # Извлекаем глобальный токен OpenAI из окружения Timeweb Cloud
+    # Токен ИИ-шлюза, проброшенный в переменные Timeweb Cloud App Platform
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        logger.error("Критическая ошибка: Переменная OPENAI_API_KEY не найдена.")
-        raise HTTPException(status_code=500, detail="Конфигурация сервера сломана: отсутствует API_KEY")
+        logger.error("Переменная OPENAI_API_KEY отсутствует в окружении.")
+        raise HTTPException(status_code=500, detail="Ошибка конфигурации: отсутствует API-ключ")
 
     user_query = payload.command
-    logger.info(f"Получена команда от пользователя: {user_query}")
+    logger.info(f"Запрос от пользователя: {user_query}")
 
-    # Собираем контекст на лету
     rag_context = get_rag_context()
 
-    # Формируем системный промпт Джинни (Проект Джарвис)
     system_prompt = (
         "Ты — Джинни (Проект Джарвис), ИИ-ассистент компании MONOLIT-MOS.\n"
-        "Твоя цель — консультировать клиентов по ценам и закрывать их на бесплатный замер.\n"
-        "У нас 10 лет гарантии. Используй только актуальные данные из базы знаний.\n"
-        f"Контекст компании:\n{rag_context}"
+        "Консультируй клиентов по ценам и закрывай их на бесплатный замер.\n"
+        "У нас 10 лет гарантии. Используй только актуальные данные.\n"
+        f"База знаний MONOLIT-MOS:\n{rag_context}"
     )
 
-    # ИНФРАСТРУКТУРНЫЙ МАНЕВР: ОФИЦИАЛЬНЫЙ ШЛЮЗ TIMEWEB CLOUD
-    timeweb_ai_gateway = "https://timeweb.cloud" # Либо актуальный внутренний эндпоинт провайдера
+    # ОФИЦИАЛЬНЫЙ ШЛЮЗ TIMEWEB CLOUD AI GATEWAY (OpenAI-совместимый формат)
+    timeweb_gateway_url = "https://timeweb.cloud"
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
-    # Пакет данных для ИИ шлюза
     data = {
-        "model": "gpt-4o",  # Или актуальная модель шлюза Timeweb
+        "model": "gpt-4o", 
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query}
@@ -84,22 +79,19 @@ async def handle_command(payload: CommandRequest):
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(timeweb_ai_gateway, headers=headers, json=data)
+            response = await client.post(timeweb_gateway_url, headers=headers, json=data)
             
             if response.status_code != 200:
                 logger.error(f"Шлюз ИИ вернул ошибку {response.status_code}: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail="Ошибка шлюза искусственного интеллекта")
+                raise HTTPException(status_code=response.status_code, detail="Ошибка обработки запроса шлюзом ИИ")
 
             ai_response = response.json()
-            reply_text = ai_response["choices"][0]["message"]["content"]
+            reply_text = ai_response["choices"]["message"]["content"]
             return {"status": "success", "response": reply_text}
 
     except httpx.RequestError as e:
-        logger.error(f"Сетевая ошибка при запросе к ИИ-шлюзу: {e}")
-        raise HTTPException(status_code=502, detail="Не удалось связаться с ИИ-сервером")
+        logger.error(f"Сетевой сбой шлюза: {e}")
+        raise HTTPException(status_code=502, detail="Сетевой сбой при связи с ИИ-сервером")
     except Exception as e:
-        logger.error(f"Непредвиденная ошибка бэкенда: {e}")
+        logger.error(f"Ошибка бэкенда: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-                pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                extracted_file_text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
