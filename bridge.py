@@ -24,6 +24,7 @@ app.add_middleware(
 FRONTEND_FILE = os.path.join(os.path.dirname(__file__), "index.html")
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "jinni_knowledge")
 
+
 class CommandRequest(BaseModel):
     command: str
 
