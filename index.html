@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <title>Панель управления Джинни</title>
+    <script src="https://telegram.org"></script>
     <style>
         body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
         .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 600px; text-align: center; }
         h1 { font-size: 20px; letter-spacing: 3px; margin-bottom: 25px; text-shadow: 0 0 10px #00f0ff; }
-        .arc-btn { background: #005577; border: 2px solid #fff; color: #fff; padding: 15px 35px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 30px; box-shadow: 0 0 15px #00f0ff; margin-bottom: 15px; transition: all 0.3s ease; }
+        .arc-btn { background: #005577; border: 2px solid #fff; color: #fff; padding: 15px 35px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 30px; box-shadow: 0 0 15px #00f0ff; margin-bottom: 15px; transition: all 0.3s ease; outline: none; }
         .recording { background: #ff0055 !important; box-shadow: 0 0 30px #ff0055 !important; }
         .status { margin-bottom: 15px; font-size: 13px; color: #88aadd; }
         .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 250px; overflow-y: auto; text-align: left; padding: 15px; margin-bottom: 15px; }
@@ -16,14 +17,14 @@
         .msg-user::before { content: "Сэр> "; color: #88aadd; font-weight: bold; }
         .msg-jinni { color: #00f0ff; }
         .msg-jinni::before { content: "Джинни> "; color: #00f0ff; font-weight: bold; }
-        .input-area { display: flex; gap: 10px; align-items: center; }
-        .text-input { flex: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; }
+        .input-area { display: flex; gap: 10px; align-items: center; width: 100%; }
+        .text-input { flex: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 242, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; }
         .text-input:focus { border-color: #00f0ff; box-shadow: 0 0 10px rgba(0,240,245,0.3); }
-        .file-label { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .file-label { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
         #fileInput { display: none; }
-        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00f0ff; padding: 10px; border-radius: 5px; position: relative; background: rgba(0, 30, 50, 0.4); }
+        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00f0ff; padding: 10px; border-radius: 5px; position: relative; background: rgba(0, 30, 50, 0.4); width: 100%; box-sizing: border-box; }
         .file-info { font-size: 12px; color: #e1e1e1; display: flex; align-items: center; gap: 10px; }
-        .cancel-img { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #ff0055; cursor: pointer; font-weight: bold; font-size: 12px; }
+        .cancel-img { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #ff0055; cursor: pointer; font-weight: bold; font-size: 12px; user-select: none; }
     </style>
 </head>
 <body>
@@ -36,10 +37,10 @@
         </div>
         <div id="previewBox" class="preview-box">
             <div class="file-info">
-                <span id="fileIcon" style="font-size: 20px;">📄</span>
+                <span id="fileIcon" style="font-size: 16px;">📄</span>
                 <span id="fileNameText">document.pdf</span>
             </div>
-            <span id="cancelImg">❌ УДАЛИТЬ</span>
+            <span id="cancelImg" class="cancel-img">❌ УДАЛИТЬ</span>
         </div>
         <div class="input-area">
             <label for="fileInput" class="file-label">📎</label>
@@ -48,6 +49,9 @@
         </div>
     </div>
     <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready(); tg.expand();
+
         const voiceBtn = document.getElementById('voiceBtn');
         const statusText = document.getElementById('status');
         const chatLog = document.getElementById('chatLog');
@@ -58,7 +62,10 @@
         const fileIcon = document.getElementById('fileIcon');
         const cancelImg = document.getElementById('cancelImg');
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        let isSending = false; let attachedFileBase64 = null; let attachedFileName = null;
+        
+        let isSending = false; 
+        let attachedFileBase64 = null; 
+        let attachedFileName = null;
 
         fileInput.onchange = () => {
             if (fileInput.files && fileInput.files[0]) {
@@ -106,6 +113,41 @@
             }
         }
 
+        async function executeCommand(text, fileData, fileName, inputType) {
+            if (isSending) return;
+            isSending = true;
+            statusText.innerText = "Джинни обрабатывает директиву...";
+
+            try {
+                const response = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        command: text,
+                        file_data: fileData,
+                        file_name: fileName,
+                        input_type: inputType
+                    })
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    appendMessage(data.reply, 'jinni');
+                    speak(data.reply);
+                    statusText.innerText = "Ядро активно | Система готова.";
+                } else {
+                    appendMessage(`Ошибка: ${data.reply}`, 'jinni');
+                    statusText.innerText = "Сбой обработки.";
+                }
+            } catch (err) {
+                appendMessage("Критический сбой связи с ядрами.", "jinni");
+                statusText.innerText = "🔴 Сбой связи";
+            } finally {
+                isSending = false;
+                // Очищаем прикрепленный файл после успешной отправки
+                attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
+            }
+        }
+
         textInput.onkeydown = (e) => {
             if (e.key === 'Enter' && !isSending) {
                 const text = textInput.value.trim();
@@ -137,52 +179,15 @@
                 appendMessage(displayMsg, 'user'); 
                 executeCommand(resultText, attachedFileBase64, attachedFileName, "voice");
             };
-            recognition.onend = () => { voiceBtn.classList.remove('recording'); };
-            recognition.onerror = () => { voiceBtn.classList.remove('recording'); };
-        }
-
-        function executeCommand(text, fileBase64, fileName, inputType) {
-            isSending = true; 
-            statusText.innerText = "Джинни обрабатывает данные..."; 
-            voiceBtn.classList.remove('recording');
-            
-            const payload = {
-                command: text,
-                file: fileBase64,
-                filename: fileName
+            recognition.onerror = (e) => {
+                console.error(e);
+                voiceBtn.classList.remove('recording');
+                statusText.innerText = "Ошибка распознавания голоса.";
             };
-
-            attachedFileBase64 = null; attachedFileName = null; fileInput.value = ""; previewBox.style.display = 'none';
-            
-            fetch('http://72.56.84', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            })
-            .then(res => {
-                if (!res.ok) throw new Error(`Ошибка сервера: ${res.status}`);
-                return res.json();
-            })
-            .then(data => {
-                if (data && data.response) {
-                    appendMessage(data.response, 'jinni');
-                    if (inputType === "voice") {
-                        speak(data.response);
-                    }
-                    statusText.innerText = "Система готова, сэр... ";
-                } else {
-                    appendMessage("Ошибка: Сервер вернул пустой ответ или некорректный формат данных.", 'jinni');
-                    statusText.innerText = "Ошибка разбора ответа.";
-                }
-            })
-            .catch(err => {
-                console.error(err);
-                appendMessage(`Критическая ошибка связи с ядром: ${err.message}`, 'jinni');
-                statusText.innerText = "Сбой операции.";
-            })
-            .finally(() => {
-                isSending = false;
-            });
+        } else {
+            // Если браузер не поддерживает SpeechRecognition (например, старый WebKit)
+            voiceBtn.style.display = 'none';
+            statusText.innerText = "Голосовой ввод не поддерживается.";
         }
     </script>
 </body>
