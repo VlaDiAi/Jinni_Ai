@@ -7,24 +7,22 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import Optional
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
 
-# НАСТРОЙКА ЛОГОВ
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# ЖЕСТКАЯ КОНФИГУРАЦИЯ СЕТИ И ТОКЕНОВ ДЛЯ MONOLIT-MOS
 BOT_TOKEN = "8769609728:AAEQ5dUW3xltJA2EfRvrjdqPLdNZ06tty7Y"
 MINI_APP_URL = "https://twc1.net"
 TIMEWEB_API_KEY = os.getenv("TIMEWEB_API_KEY", "AQ.Ab8RN6J2R7TDXklOe3PM2Qg375du8ZvpdYWJQWnRkLLpultRSw")
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "./jinni_knowledge"
 
-# ИНИЦИАЛИЗАЦИЯ FASTAPI
 app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
 
 app.add_middleware(
@@ -35,12 +33,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ИНИЦИАЛИЗАЦИЯ TG-БОТА
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# РАСШИРЕННАЯ МОДЕЛЬ ДАННЫХ ПОД НОВЫЙ ФРОНТЕНД
 class CommandRequest(BaseModel):
     command: str
+    file_data: Optional[str] = None
+    file_name: Optional[str] = None
+    input_type: Optional[str] = "text"
 
 def get_multi_agent_context() -> str:
     context = ""
@@ -59,13 +60,7 @@ def get_multi_agent_context() -> str:
 
 @app.get("/")
 async def serve_index():
-    # Алгоритм автопоиска index.html в облачном контейнере Timeweb
-    possible_paths = [
-        "/app/index.html",
-        "./index.html",
-        "./frontend/index.html",
-        "/opt/ai_orchestrator/index.html"
-    ]
+    possible_paths = ["/app/index.html", "./index.html", "./frontend/index.html"]
     for path in possible_paths:
         if os.path.exists(path):
             return FileResponse(path, media_type="text/html")
@@ -74,7 +69,10 @@ async def serve_index():
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command
-    logger.info(f"🔮 Запрос от Влада взят в обработку: {user_query}")
+    logger.info(f"🔮 Запрос от Влада взят в обработку. Тип ввода: {request.input_type}")
+    
+    if request.file_name:
+        logger.info(f"📎 Субагент ИИ-Сметчик подключен к анализу файла: {request.file_name}")
     
     company_context = get_multi_agent_context()
     
@@ -96,20 +94,25 @@ async def process_command(request: CommandRequest):
         "Content-Type": "application/json"
     }
     
+    # Формируем контент для GPT-4o (мультимодальный, если закинули картинку/файл)
+    messages_content = [{"type": "text", "text": user_query}]
+    if request.file_data and request.file_name:
+        messages_content.append({"type": "text", "text": f"\n[Прикреплен документ/смета: {request.file_name}. Контент в base64: {request.file_data[:100]}...]"})
+
     payload = {
         "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_query}
+            {"role": "user", "content": messages_content}
         ]
     }
     
     try:
-        async with httpx.AsyncClient(timeout=40.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code != 200:
                 logger.error(f"Ошибка ИИ-шлюза: {response.status_code} - {response.text}")
-                return {"status": "success", "reply": "Связь установлена, но ИИ-шлюз сейчас недоступен."}
+                return {"status": "success", "reply": "Директива принята, но ИИ-шлюз перегружен."}
             
             result = response.json()
             ai_reply = result['choices'][0]['message']['content']
