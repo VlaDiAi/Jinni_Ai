@@ -122,7 +122,7 @@ async def process_command(request: CommandRequest):
         messages_content.append({"type": "text", "text": f"\n[Документ/смета: {file_name}. Контент в base64: {file_data[:100]}...]"})
 
     api_payload = {
-        "model": "gpt-4o",  # Базовый шлюз принимает запросы к gpt-4o, перенаправляя на нано-ядро
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": messages_content}
@@ -136,7 +136,7 @@ async def process_command(request: CommandRequest):
                 logger.error(f"Шлюз выдал статус {response.status_code}: {response.text}")
                 return {"status": "success", "reply": "Ядро активно, но внешний ИИ-шлюз сейчас недоступен."}
             result = response.json()
-            return {"status": "success", "reply": result['choices'][0]['message']['content']}
+            return {"status": "success", "reply": result['choices']['message']['content']}
     except Exception as e:
         logger.error(f"Ошибка ИИ-шлюза: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -149,18 +149,18 @@ async def rtc_connect(request: RTCRequest):
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(TIMEWEB_RTC_URL, headers=headers, content=request.sdp)
-            if response.status_code not in [200, 201]:
+            # ИСПРАВЛЕНО: Корректная проверка статуса ответа шлюза
+            if response.status_code not in:
                 return {"error": "Голосовое ядро перегружено."}
             return {"sdp": response.text, "type": "answer"}
     except Exception as e:
         return {"error": str(e)}
 
-# ХЕНДЛЕР TG КОМАНДЫ /START
-@dp.message(types.Message)
+# ХЕНДЛЕР TG КОМАНДЫ /START (И ЛЮБЫХ ДРУГИХ СООБЩЕНИЙ)
+@dp.message()
 async def handle_any_message(message: types.Message):
-    # Реагирует и на /start, и на любое текстовое сообщение в чате бота
     welcome_text = (
-        f"🔮 <b>Приветствую, Влад!</b>\n\n"
+        f"🔮 <b>Приветствую, {message.from_user.first_name}!</b>\n\n"
         f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n"
         f"Безопасный протокол запущен. Скомпилированы WebRTC и Langflow.\n\n"
         f"🤖 Нажми кнопку ниже, чтобы открыть пульт управления!"
