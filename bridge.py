@@ -1,18 +1,32 @@
 import os
+import asyncio
 import logging
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import sys
 import httpx
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import uvicorn
 
-# Настройка сквозного логирования оркестратора
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# НАСТРОЙКА ЛОГОВ
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-app = FastAPI(title="MONOLIT-MOS AI Orchestrator (Jarvis)")
+# ЖЕСТКАЯ КОНФИГУРАЦИЯ СЕТИ И ТОКЕНОВ ДЛЯ MONOLIT-MOS
+BOT_TOKEN = "8769609728:AAEQ5dUW3xltJA2EfRvrjdqPLdNZ06tty7Y"
+MINI_APP_URL = "https://twc1.net"
+TIMEWEB_API_KEY = os.getenv("TIMEWEB_API_KEY", "AQ.Ab8RN6J2R7TDXklOe3PM2Qg375du8ZvpdYWJQWnRkLLpultRSw")
+TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
+KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "./jinni_knowledge"
 
-# ГЛОБАЛЬНЫЙ МАНЕВР CORS: разрешаем Mini App внутри Telegram отправлять запросы без блокировок
+# ИНИЦИАЛИЗАЦИЯ FASTAPI
+app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,21 +35,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def find_frontend_path():
-    for path in ["index.html", "/app/index.html", "./index.html", "VladAI/Jinni-AI-Assistant/index.html"]:
-        if os.path.exists(path):
-            return path
-    return "index.html"
-
-FRONTEND_FILE = find_frontend_path()
-KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "/app/jinni_knowledge"
-
-
+# ИНИЦИАЛИЗАЦИЯ TG-БОТА
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
 class CommandRequest(BaseModel):
     command: str
 
-# Автоматическая сборка контекста ИИ-фабрики (RAG)
 def get_multi_agent_context() -> str:
     context = ""
     try:
@@ -44,261 +50,92 @@ def get_multi_agent_context() -> str:
                 file_path = os.path.join(KNOWLEDGE_DIR, file_name)
                 if os.path.exists(file_path):
                     with open(file_path, "r", encoding="utf-8") as f:
-                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n" + f.read()
+                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n"
+                        context += f.read() + "\n"
+        return context if context else "Системные протоколы МОНОЛИТ-МОС активны."
     except Exception as e:
         logger.error(f"Ошибка чтения базы знаний RAG: {e}")
-    return context or "Системные протоколы MONOLIT-MOS активны."
+        return "Системные протоколы МОНОЛИТ-МОС активны."
 
-# Отдача фронтенда на главную страницу (убирает белый экран)
-@app.get("/", response_class=HTMLResponse)
-async def get_index():
-    if os.path.exists(FRONTEND_FILE):
-        return FileResponse(FRONTEND_FILE)
-    return HTMLResponse(content="<h1>Критическая ошибка: index.html отсутствует в корне репозитория!</h1>", status_code=404)
+@app.get("/")
+async def serve_index():
+    # Алгоритм автопоиска index.html в облачном контейнере Timeweb
+    possible_paths = [
+        "/app/index.html",
+        "./index.html",
+        "./frontend/index.html",
+        "/opt/ai_orchestrator/index.html"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return FileResponse(path, media_type="text/html")
+    return {"error": "Frontend index.html not found"}
 
-# Главный эндпоинт связи ядра с фронтендом мини-аппа
 @app.post("/api/command")
-async def handle_command(payload: CommandRequest):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.error("Критическая ошибка: Переменная OPENAI_API_KEY не найдена в Timeweb.")
-        raise HTTPException(status_code=500, detail="Missing OPENAI_API_KEY")
-
-    user_query = payload.command
-    logger.info(f"📍 Оркестратор Джарвис принял задачу от Влада: {user_query}")
-
+async def process_command(request: CommandRequest):
+    user_query = request.command
+    logger.info(f"🔮 Запрос от Влада взят в обработку: {user_query}")
+    
     company_context = get_multi_agent_context()
-
-    # СИСТЕМНАЯ МАТРИЦА ГЛАВНОГО ОРКЕСТРАТОРА (CEO ЭКОСИСТЕМЫ)
+    
     system_prompt = (
-        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) цифровой экосистемы MONOLIT-MOS.\n"
+        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
         "В твоем прямом подчинении находятся специализированные ИИ-агенты:\n"
         "1. ИИ-Сметчик (анализ PDF/Excel, расчет стоимости материалов и работ).\n"
-        "2. ИИ-Проектировщик (архитектурные решения, конструктив, планировки домов).\n"
-        "3. ИИ-Дизайнер (интерьеры, неоновые стили, фасадные решения).\n"
-        "4. ИИ-Мебельщик (встроенные решения, кухни, спецификации).\n"
+        "2. ИИ-Проектировщик (архитектурные решения, конструктив, планировка домов).\n"
+        "3. ИИ-Дизайнер (интерьеры, neon-стили, фасадные решения).\n"
+        "4. ИИ-Мебельщик (встроенные решения, кухни, характеристики).\n"
         "5. ИИ-Интегратор (управление кодом системы через GitHub API и CRM Битрикс24).\n\n"
         "ТВОЯ ЗАДАЧА:\n"
-        "Принимать комплексные задачи от Влада, распределять их между своими суб-агентами, контролировать выполнение и выдавать Владу идеальный консолидированный результат.\n\n"
-        f"Глобальный контекст экосистемы MONOLIT-MOS:\n{company_context}"
+        "Принимать комплексные задачи от Влада, распределять их между своими субагентами.\n"
+        f"Глобальный контекст экосистемы МОНОЛИТ-МОС:\n{company_context}"
     )
-
-    timeweb_gateway_url = "https://timeweb.cloud"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
-    data = {
-        "model": "gpt-4o", 
+    headers = {
+        "Authorization": f"Bearer {TIMEWEB_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query}
         ]
     }
-
+    
     try:
         async with httpx.AsyncClient(timeout=40.0) as client:
-            response = await client.post(timeweb_gateway_url, headers=headers, json=data)
+            response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code != 200:
-                logger.error(f"Шлюз вернул ошибку {response.status_code}: {response.text}")
-                return {"status": "success", "response": "Джарвис на связи, но ИИ-шлюз временно недоступен. Проверь баланс токенов в Timeweb."}
-
-            ai_response = response.json()
-            return {"status": "success", "response": ai_response["choices"]["message"]["content"]}
+                logger.error(f"Ошибка ИИ-шлюза: {response.status_code} - {response.text}")
+                return {"status": "success", "reply": "Связь установлена, но ИИ-шлюз сейчас недоступен."}
+            
+            result = response.json()
+            ai_reply = result['choices'][0]['message']['content']
+            return {"status": "success", "reply": ai_reply}
+            
     except Exception as e:
-        logger.error(f"Ошибка связи со шлюзом Timeweb: {e}")
+        logger.error(f"Критическое исключение при вызове ИИ-шлюза: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Джинни — ИИ Оркестратор</title>
-    <script src="https://telegram.org"></script>
-    <style>
-        :root {
-            --neon-cyan: #00f2fe;
-            --neon-purple: #4facfe;
-            --bg-dark: #0a0b10;
-            --card-bg: rgba(20, 22, 34, 0.7);
-        }
-        body {
-            background-color: var(--bg-dark);
-            color: #ffffff;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            margin: 0;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            height: 92vh;
-            overflow: hidden;
-        }
-        .header {
-            text-align: center;
-            padding: 10px 0;
-            border-bottom: 1px solid rgba(0, 242, 254, 0.2);
-        }
-        .header h1 {
-            font-size: 20px;
-            margin: 0;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            background: linear-gradient(45deg, var(--neon-cyan), var(--neon-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-shadow: 0 0 10px rgba(0, 242, 254, 0.3);
-        }
-        .status-bar {
-            font-size: 11px;
-            color: var(--neon-cyan);
-            margin-top: 5px;
-            opacity: 0.8;
-        }
-        .chat-container {
-            flex: 1;
-            overflow-y: auto;
-            margin: 15px 0;
-            padding: 10px;
-            background: var(--card-bg);
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.5);
-        }
-        .message {
-            margin-bottom: 12px;
-            max-width: 85%;
-            padding: 10px 14px;
-            border-radius: 14px;
-            font-size: 14px;
-            line-height: 1.4;
-            animation: fadeIn 0.3s ease;
-        }
-        .user-message {
-            background: linear-gradient(135deg, #2b304a, #1f2336);
-            margin-left: auto;
-            border-bottom-right-radius: 2px;
-            border: 1px solid rgba(79, 172, 254, 0.2);
-        }
-        .jarvis-message {
-            background: linear-gradient(135deg, #16222f, #0d1620);
-            margin-right: auto;
-            border-bottom-left-radius: 2px;
-            border: 1px solid rgba(0, 242, 254, 0.2);
-        }
-        .input-area {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            background: rgba(20, 22, 34, 0.9);
-            padding: 8px;
-            border-radius: 25px;
-            border: 1px solid rgba(0, 242, 254, 0.2);
-        }
-        textarea {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: white;
-            padding: 8px 12px;
-            font-size: 14px;
-            resize: none;
-            outline: none;
-            height: 24px;
-            font-family: inherit;
-        }
-        .btn {
-            background: linear-gradient(45deg, var(--neon-cyan), var(--neon-purple));
-            border: none;
-            color: white;
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 10px rgba(0, 242, 254, 0.4);
-            transition: transform 0.1s;
-        }
-        .btn:active { transform: scale(0.9); }
-        .clip-btn {
-            background: transparent;
-            border: none;
-            color: #8e92a5;
-            font-size: 20px;
-            cursor: pointer;
-            padding: 0 5px;
-        }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
-</head>
-<body>
 
-    <div class="header">
-        <h1>Когнитивный Комплекс Джарвис</h1>
-        <div class="status-bar" id="statusBar">● Ядро активно | Готов к оркестрации</div>
-    </div>
+@dp.message(commands=["start"])
+async def cmd_start(message: types.Message):
+    welcome_text = (
+        f"🔮 <b>Приветствую, {message.from_user.first_name}!</b>\n\n"
+        f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n\n"
+        f"🤖 Нажми кнопку ниже, чтобы открыть пульт управления!"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🚀 Открыть пульт Джинни", web_app=types.WebAppInfo(url=MINI_APP_URL)))
+    await message.answer(welcome_text, reply_markup=builder.as_markup())
 
-    <div class="chat-container" id="chatBox">
-        <div class="message jarvis-message">
-            Приветствую, Влад. Модули ИИ-Сметчика, Проектировщика, Дизайнера и Мебельщика подключены. Жду ваших директив.
-        </div>
-    </div>
+async def main():
+    asyncio.create_task(dp.start_polling(bot))
+    logger.info("🤖 Telegram bot started in Polling mode.")
+    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
-    <div class="input-area">
-        <button class="clip-btn">📎</button>
-        <textarea id="userInput" placeholder="Введите команду или смету..."></textarea>
-        <button class="btn" id="sendBtn" onclick="sendCommand()">⚡</button>
-    </div>
-
-    <script>
-        // Инициализация Telegram WebApp
-        const tg = window.Telegram.WebApp;
-        tg.expand(); // Раскрываем мини-апп на весь экран
-
-        async function sendCommand() {
-            const inputEl = document.getElementById('userInput');
-            const commandText = inputEl.value.trim();
-            if (!commandText) return;
-
-            appendMessage(commandText, 'user-message');
-            inputEl.value = '';
-            document.getElementById('statusBar').innerText = "● Джарвис думает, координирует агентов...";
-
-            try {
-                // ИНФРАСТРУКТУРНЫЙ МАНЕВР: относительный путь исключает ошибку Failed to Fetch
-                const response = await fetch('/api/command', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: commandText })
-                });
-
-                if (!response.ok) throw new Error('Ошибка связи с ядром');
-
-                const data = await response.json();
-                appendMessage(data.response, 'jarvis-message');
-                document.getElementById('statusBar').innerText = "● Ядро активно | Готов к оркестрации";
-            } catch (error) {
-                console.error(error);
-                appendMessage("Критическая ошибка связи с ядром: Не удалось получить ответ.", 'jarvis-message');
-                document.getElementById('statusBar').innerText = "🔴 Сбой связи";
-            }
-        }
-
-        function appendMessage(text, className) {
-            const chatBox = document.getElementById('chatBox');
-            const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${className}`;
-            msgDiv.innerText = text;
-            chatBox.appendChild(msgDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
-
-        // Отправка по нажатию Enter
-        document.getElementById('userInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendCommand();
-            }
-        });
-    </script>
-</body>
-</html>
+if __name__ == "__main__":
+    asyncio.run(main())
