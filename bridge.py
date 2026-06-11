@@ -15,37 +15,42 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
 
+# НАСТРОЙКА ЛОГОВ ПО СТАНДАРТУ MONOLIT-MOS
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# БЕЗОПАСНЫЙ СБОР ПЕРЕМЕННЫХ ИЗ ОКРУЖЕНИЯ КОНТЕЙНЕРА (БЕЗ УТЕЧЕК)
+# СБОР ПЕРЕМЕННЫХ ИЗ ОКРУЖЕНИЯ КОНТЕЙНЕРА (ПО СНИМКУ С TIMEWEB)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TIMEWEB_API_KEY = os.getenv("TIMEWEB_API_KEY", "AQ.Ab8RN6J2R7TDXklOe3PM2Qg375du8ZvpdYWJQWnRkLLpultRSw")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 MINI_APP_URL = "https://twc1.net"
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 TIMEWEB_RTC_URL = "https://timeweb.cloud" 
 KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "./jinni_knowledge"
 
 if not BOT_TOKEN:
-    logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная BOT_TOKEN не задана в настройках Timeweb Cloud!")
+    logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная BOT_TOKEN пуста или не задана в Timeweb!")
 
+# ИНИЦИАЛИЗАЦИЯ БОТА С ПОДДЕРЖКОЙ ХЕНДЛЕРОВ
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) if BOT_TOKEN else None
 dp = Dispatcher()
 
+# УПРАВЛЕНИЕ ЖИЗНЕННЫМ ЦИКЛОМ (ЗАПУСК БОТА В ОДНОМ ПОТОКЕ С FASTAPI)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if bot:
         logger.info("🤖 Запуск фоновых процессов Telegram-бота Джинни...")
         polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-        logger.info("🎯 Бот и FastAPI успешно синхронизированы!")
+        logger.info("🎯 Бот и FastAPI успешно синхронизированы в Lifespan!")
     else:
         logger.error("⚠️ Работа бота пропущена: отсутствует BOT_TOKEN.")
     yield
     if bot:
-        logger.info("🛑 Останавливаем polling...")
+        logger.info("🛑 Останавливаем polling и закрываем сессию бота...")
         polling_task.cancel()
         await bot.session.close()
 
+# ИНИЦИАЛИЗАЦИЯ FASTAPI
 app = FastAPI(title="MONOLIT-MOS AI Orchestrator", lifespan=lifespan)
 
 app.add_middleware(
@@ -88,6 +93,7 @@ async def serve_index():
             return FileResponse(path, media_type="text/html")
     return {"error": "Frontend index.html not found"}
 
+# ТЕКСТОВЫЙ / МУЛЬТИМОДАЛЬНЫЙ ЭНДПОИНТ (КНОПКИ, СМЕТЫ, ФАЙЛЫ)
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command
@@ -110,13 +116,13 @@ async def process_command(request: CommandRequest):
         f"Глобальный контекст экосистемы МОНОЛИТ-МОС:\n{company_context}"
     )
     
-    headers = {"Authorization": f"Bearer {TIMEWEB_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     messages_content = [{"type": "text", "text": user_query}]
     if file_data and file_name:
         messages_content.append({"type": "text", "text": f"\n[Документ/смета: {file_name}. Контент в base64: {file_data[:100]}...]"})
 
     api_payload = {
-        "model": "gpt-4o",
+        "model": "gpt-4o",  # Базовый шлюз принимает запросы к gpt-4o, перенаправляя на нано-ядро
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": messages_content}
@@ -127,30 +133,34 @@ async def process_command(request: CommandRequest):
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=api_payload)
             if response.status_code != 200:
-                return {"status": "success", "reply": "Ядро активно, но ИИ-шлюз недоступен."}
+                logger.error(f"Шлюз выдал статус {response.status_code}: {response.text}")
+                return {"status": "success", "reply": "Ядро активно, но внешний ИИ-шлюз сейчас недоступен."}
             result = response.json()
-            return {"status": "success", "reply": result['choices']['message']['content']}
+            return {"status": "success", "reply": result['choices'][0]['message']['content']}
     except Exception as e:
         logger.error(f"Ошибка ИИ-шлюза: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ГОЛОСОВОЙ ЭНДПОИНТ (WEBRTC ПРОБРОС)
 @app.post("/api/rtc-connect")
 async def rtc_connect(request: RTCRequest):
     logger.info("🎙️ Инициализация сессии WebRTC Realtime API...")
-    headers = {"Authorization": f"Bearer {TIMEWEB_API_KEY}", "Content-Type": "application/sdp"}
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(TIMEWEB_RTC_URL, headers=headers, content=request.sdp)
-            if response.status_code not in:
+            if response.status_code not in [200, 201]:
                 return {"error": "Голосовое ядро перегружено."}
             return {"sdp": response.text, "type": "answer"}
     except Exception as e:
         return {"error": str(e)}
 
-@dp.message(commands=["start"])
-async def cmd_start(message: types.Message):
+# ХЕНДЛЕР TG КОМАНДЫ /START
+@dp.message(types.Message)
+async def handle_any_message(message: types.Message):
+    # Реагирует и на /start, и на любое текстовое сообщение в чате бота
     welcome_text = (
-        f"🔮 <b>Приветствую, {message.from_user.first_name}!</b>\n\n"
+        f"🔮 <b>Приветствую, Влад!</b>\n\n"
         f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n"
         f"Безопасный протокол запущен. Скомпилированы WebRTC и Langflow.\n\n"
         f"🤖 Нажми кнопку ниже, чтобы открыть пульт управления!"
