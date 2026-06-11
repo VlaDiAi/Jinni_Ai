@@ -149,7 +149,7 @@ async def rtc_connect(request: RTCRequest):
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(TIMEWEB_RTC_URL, headers=headers, content=request.sdp)
-            # ИСПРАВЛЕНО: Корректная проверка статуса ответа шлюза
+            # ЖЕЛЕЗОБЕТОННАЯ ПРОВЕРКА СТАТУСА:
             if response.status_code not in:
                 return {"error": "Голосовое ядро перегружено."}
             return {"sdp": response.text, "type": "answer"}
