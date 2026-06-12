@@ -1,164 +1,104 @@
-import os
-import asyncio
-import logging
-import sys
-import httpx
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import Optional
-from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-import uvicorn
+import os, asyncio, logging, sys, base64, io, httpx, pypdf, openpyxl, uvicorn
+from fastapi import FastAPI, Request; from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse; from pydantic import BaseModel; from typing import Optional
+from aiogram import Bot, Dispatcher, types; from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties; from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# НАСТРОЙКА ЛОГОВ ПО СТАНДАРТУ MONOLIT-MOS
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("JinniOrchestrator")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger("Jinni")
 
-# СБОР ПЕРЕМЕННЫХ ИЗ ОКРУЖЕНИЯ КОНТЕЙНЕРА
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-MINI_APP_URL = "https://twc1.net"
+BOT_TOKEN = "8769609728:AAHAJK16YhqpVxIy6sKtqCLY0E2FZZiutq0"
+OPENAI_API_KEY = "AQ.Ab8RN6J2R7TDXklOe3PM2Qg375du8ZvpdYWJQWnRkLLpultRSw"
+SERVER_IP_URL = "http://72.56.84.16:8000"  
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
-TIMEWEB_RTC_URL = "https://timeweb.cloud" 
-KNOWLEDGE_DIR = "jinni_knowledge" if os.path.exists("jinni_knowledge") else "./jinni_knowledge"
+TIMEWEB_RTC_URL = "https://timeweb.cloud"
+KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
-app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class CommandRequest(BaseModel):
-    command: str
-    file_data: Optional[str] = None
-    file_name: Optional[str] = None
-
+    command: str; file_data: Optional[str] = None; file_name: Optional[str] = None
 class RTCRequest(BaseModel):
-    sdp: str
-    type: str
+    sdp: str; type: str
 
+def parse_incoming_file(b64_str: str, name: str) -> str:
+    try:
+        if "," in b64_str: b64_str = b64_str.split(",")[1]
+        b = base64.b64decode(b64_str); ext = name.split(".")[-1].lower()
+        txt = f"\n--- ФАЙЛ СМЕТЫ: {name} ---\n"
+        if ext == "pdf":
+            reader = pypdf.PdfReader(io.BytesIO(b))
+            for i, p in enumerate(reader.pages): txt += f"[Стр {i+1}]\n" + (p.extract_text() or "") + "\n"
+        elif ext in ["xlsx", "xls"]:
+            wb = openpyxl.load_workbook(io.BytesIO(b), data_only=True)
+            for s in wb.sheetnames[:3]:
+                txt += f"[Лист: {s}]\n"
+                for r in wb[s].iter_rows(values_only=True):
+                    if any(r): txt += " | ".join([str(c) if c is not None else "" for c in r]) + "\n"
+        else: txt += b.decode("utf-8", errors="ignore")
+        return txt + "--- КОНЕЦ СМЕТЫ ---"
+    except Exception as e:
+        return f"\n[Ошибка сметчика при парсинге {name}: {e}]"
 def get_multi_agent_context() -> str:
-    context = ""
+    ctx = ""
     try:
         if os.path.exists(KNOWLEDGE_DIR):
-            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
-                file_path = os.path.join(KNOWLEDGE_DIR, file_name)
-                if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n"
-                        context += f.read() + "\n"
-        return context if context else "Системные протоколы МОНОЛИТ-МОС активны."
-    except Exception as e:
-        logger.error(f"Ошибка чтения базы знаний RAG: {e}")
-        return "Системные протоколы МОНОЛИТ-МОС активны."
+            for f_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
+                p = os.path.join(KNOWLEDGE_DIR, f_name)
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as f:
+                        ctx += f"\n=== МОДУЛЬ ЗНАНИЙ: {f_name.upper()} ===\n" + f.read() + "\n"
+        return ctx if ctx else "Протоколы МОНОЛИТ-МОС активны."
+    except: return "Протоколы МОНОЛИТ-МОС активны."
 
 @app.get("/")
 async def serve_index():
-    possible_paths = ["/app/index.html", "./index.html", "./frontend/index.html"]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return FileResponse(path, media_type="text/html")
-    return {"error": "Frontend index.html not found"}
+    for p in ["/opt/ai_orchestrator/index.html", "./index.html", "index.html"]:
+        if os.path.exists(p): return FileResponse(p, media_type="text/html")
+    return {"error": "index.html не найден"}
 
 @app.post("/api/command")
-async def process_command(request: CommandRequest):
-    user_query = request.command
-    file_data = request.file_data
-    file_name = request.file_name
-    
-    logger.info(f"🔮 Обработка директивы от Влада: {user_query}")
-    company_context = get_multi_agent_context()
-    
-    system_prompt = (
-        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
-        "В твоем прямом подчинении находятся специализированные ИИ-агенты:\n"
-        "1. ИИ-Сметчик (расчет стоимости материалов).\n"
-        "2. ИИ-Проектировщик (архитектурные решения).\n"
-        "3. ИИ-Дизайнер (интерьеры, neon-стили).\n"
-        "4. ИИ-Мебельщик (кухни, встроенные решения).\n"
-        "5. ИИ-Интегратор (управление кодом и CRM Битрикс24).\n\n"
-        f"Глобальный контекст экосистемы МОНОЛИТ-МОС:\n{company_context}"
-    )
-    
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    messages_content = [{"type": "text", "text": user_query}]
-    if file_data and file_name:
-        messages_content.append({"type": "text", "text": f"\n[Документ/смета: {file_name}. Контент в base64: {file_data[:100]}...]"})
-
-    api_payload = {
-        "model": "gpt-4o",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": messages_content}
-        ]
-    }
+async def process_command(req: CommandRequest):
+    user_query = req.command or "Анализ документа"
+    logger.info(f"🔮 Директива от Влада: {user_query}")
+    sys_prompt = f"Ты Джинни, CEO фабрики MONOLIT-MOS. Контекст:\n{get_multi_agent_context()}"
+    content = [{"type": "text", "text": user_query}]
+    if req.file_data and req.file_name:
+        content.append({"type": "text", "text": parse_incoming_file(req.file_data, req.file_name)})
     
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=api_payload)
-            if response.status_code != 200:
-                return {"status": "success", "reply": "Ядро активно, но ИИ-шлюз сейчас недоступен."}
-            result = response.json()
-            return {"status": "success", "reply": result['choices']['message']['content']}
+        async with httpx.AsyncClient(timeout=40.0) as cl:
+            res = await cl.post(TIMEWEB_GATEWAY_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}, json={
+                "model": "gpt-4o", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": content}]
+            })
+            return {"status": "success", "reply": res.json()['choices'][0]['message']['content']}
     except Exception as e:
-        logger.error(f"Ошибка ИИ-шлюза: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "success", "reply": f"Задача принята. {e}"}
 
 @app.post("/api/rtc-connect")
-async def rtc_connect(request: RTCRequest):
-    logger.info("🎙️ Инициализация сессии WebRTC Realtime API...")
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}
+async def rtc_connect(req: RTCRequest):
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(TIMEWEB_RTC_URL, headers=headers, content=request.sdp)
-            if response.status_code >= 400:
-                return {"error": "Голосовое ядро перегружено."}
-            return {"sdp": response.text, "type": "answer"}
-    except Exception as e:
-        return {"error": str(e)}
+        async with httpx.AsyncClient(timeout=15.0) as cl:
+            res = await cl.post(TIMEWEB_RTC_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}, params={"model": "gpt-4o-realtime-preview-2024-10-01"}, content=req.sdp)
+            if res.status_code not in: return {"error": f"Ошибка шлюза: {res.text}"}
+            return {"sdp": res.text, "type": "answer"}
+    except Exception as e: return {"error": str(e)}
 
-# ИНИЦИАЛИЗАЦИЯ БОТА ДЛЯ АВТОНОМНОГО ЗАПУСКА
-if BOT_TOKEN:
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
-    @dp.message()
-    async def handle_any_message(message: types.Message):
-        welcome_text = (
-            f"🔮 <b>Приветствую, {message.from_user.first_name}!</b>\n\n"
-            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n\n"
-            f"🤖 Нажми кнопку ниже, чтобы открыть пульт управления!"
-        )
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🚀 Открыть пульт Джинни", web_app=types.WebAppInfo(url=MINI_APP_URL)))
-        await message.answer(welcome_text, reply_markup=builder.as_markup())
+@dp.message()
+async def handle_msg(msg: types.Message):
+    txt = f"🔮 <b>Приветствую, Влад!</b>\n\nЯ — ИИ-Оркестратор <b>«ДЖИННИ»</b>.\n\nНажми кнопку ниже для управления:"
+    kb = InlineKeyboardBuilder().row(types.InlineKeyboardButton(text="🚀 Пульт Джинни", url=SERVER_IP_URL)).as_markup()
+    await msg.answer(txt, reply_markup=kb)
 
-# МОНОЛИТНЫЙ ОДНОВРЕМЕННЫЙ ЗАПУСК
 async def run_combined():
-    # Запускаем бота в отдельном независимом таске внутри общего цикла
-    if BOT_TOKEN:
-        asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-        logger.info("🤖 Telegram-бот успешно запущен в фоновом потоке.")
-    
-    # Запускаем FastAPI сервер
-    port = int(os.getenv("PORT", 8000))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
+    asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    logger.info("🤖 Джинни запущена.")
+    srv = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info"))
+    await srv.serve()
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "bot_only":
-        # Резервный запуск только бота
-        asyncio.run(dp.start_polling(bot))
-    else:
-        # Основной совмещенный запуск
-        asyncio.run(run_combined())
+    asyncio.run(run_combined())
