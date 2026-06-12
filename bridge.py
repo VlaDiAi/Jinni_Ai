@@ -58,14 +58,15 @@ async def serve_index():
         if os.path.exists(p): return FileResponse(p, media_type="text/html")
     return {"error": "index.html не найден"}
 
-@app.post("/api/command")
-async def process_command(req: CommandRequest):
-    user_query = req.command or "Анализ документа"
-    logger.info(f"🔮 Директива от Влада: {user_query}")
-    sys_prompt = f"Ты Джинни, CEO фабрики MONOLIT-MOS. Контекст:\n{get_multi_agent_context()}"
-    content = [{"type": "text", "text": user_query}]
-    if req.file_data and req.file_name:
-        content.append({"type": "text", "text": parse_incoming_file(req.file_data, req.file_name)})
+@app.post("/api/rtc-connect")
+async def rtc_connect(req: RTCRequest):
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cl:
+            res = await cl.post(TIMEWEB_RTC_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}, params={"model": "gpt-4o-realtime-preview-2024-10-01"}, content=req.sdp)
+            if res.status_code not in: return {"error": f"Ошибка шлюза: {res.text}"}
+            return {"sdp": res.text, "type": "answer"}
+    except Exception as e: return {"error": str(e)}
+
     
     try:
         async with httpx.AsyncClient(timeout=40.0) as cl:
