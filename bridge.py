@@ -47,6 +47,7 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
+    """Автоматический поиск index.html внутри контейнера"""
     possible_paths = [
         "index.html", "./index.html", "opt/ai_orchestrator/index.html",
         "/opt/ai_orchestrator/index.html", os.path.join(os.path.dirname(__file__), "index.html")
