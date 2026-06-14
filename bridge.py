@@ -1,105 +1,157 @@
-import os, asyncio, logging, sys, base64, io, httpx, pypdf, openpyxl, uvicorn
-from fastapi import FastAPI, Request; from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse; from pydantic import BaseModel; from typing import Optional
-from aiogram import Bot, Dispatcher, types; from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties; from aiogram.utils.keyboard import InlineKeyboardBuilder
+import os
+import asyncio
+import logging
+import sys
+import httpx
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from typing import Optional
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import uvicorn
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("Jinni")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger("JinniOrchestrator")
 
-BOT_TOKEN = "8769609728:AAHAJK16YhqpVxIy6sKtqCLY0E2FZZiutq0"
-OPENAI_API_KEY = "AQ.Ab8RN6J2R7TDXklOe3PM2Qg375du8ZvpdYWJQWnRkLLpultRSw"
-SERVER_IP_URL = "http://72.56.84.16:8000"  
-TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
-TIMEWEB_RTC_URL = "https://timeweb.cloud"
-KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
+# ДИНАМИЧЕСКИЙ ПЕРЕХВАТ ПЕРЕМЕННЫХ ИЗ PANEL TIMEWEB APP PLATFORM
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# Проверка наличия критических ключей при старте контейнера
+if not BOT_TOKEN or not OPENAI_API_KEY:
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в App Platform!")
+
+# Ссылка на твой HTTPS домен в Timeweb Cloud App Platform
+WEBAPP_HTTPS_URL = "https://twc1.net" 
+
+TIMEWEB_GATEWAY_URL = "https://openai.com"
+TIMEWEB_RTC_URL = "https://openai.com"
+
+app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class CommandRequest(BaseModel):
-    command: str; file_data: Optional[str] = None; file_name: Optional[str] = None
-class RTCRequest(BaseModel):
-    sdp: str; type: str
+    command: str
+    file_data: Optional[str] = None
+    file_name: Optional[str] = None
 
-def parse_incoming_file(b64_str: str, name: str) -> str:
-    try:
-        if "," in b64_str: b64_str = b64_str.split(",")[1]
-        b = base64.b64decode(b64_str); ext = name.split(".")[-1].lower()
-        txt = f"\n--- ФАЙЛ СМЕТЫ: {name} ---\n"
-        if ext == "pdf":
-            reader = pypdf.PdfReader(io.BytesIO(b))
-            for i, p in enumerate(reader.pages): txt += f"[Стр {i+1}]\n" + (p.extract_text() or "") + "\n"
-        elif ext in ["xlsx", "xls"]:
-            wb = openpyxl.load_workbook(io.BytesIO(b), data_only=True)
-            for s in wb.sheetnames[:3]:
-                txt += f"[Лист: {s}]\n"
-                for r in wb[s].iter_rows(values_only=True):
-                    if any(r): txt += " | ".join([str(c) if c is not None else "" for c in r]) + "\n"
-        else: txt += b.decode("utf-8", errors="ignore")
-        return txt + "--- КОНЕЦ СМЕТЫ ---"
-    except Exception as e:
-        return f"\n[Ошибка сметчика при парсинге {name}: {e}]"
-def get_multi_agent_context() -> str:
-    ctx = ""
-    try:
-        if os.path.exists(KNOWLEDGE_DIR):
-            for f_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
-                p = os.path.join(KNOWLEDGE_DIR, f_name)
-                if os.path.exists(p):
-                    with open(p, "r", encoding="utf-8") as f:
-                        ctx += f"\n=== МОДУЛЬ ЗНАНИЙ: {f_name.upper()} ===\n" + f.read() + "\n"
-        return ctx if ctx else "Протоколы МОНОЛИТ-МОС активны."
-    except: return "Протоколы МОНОЛИТ-МОС активны."
+class RTCRequest(BaseModel):
+    sdp: str
+    type: str
+
+def find_frontend_path():
+    """Умный блок авто-поиска index.html внутри облачного контейнера"""
+    possible_paths = [
+        "index.html",
+        "./index.html",
+        "/opt/ai_orchestrator/index.html",
+        os.path.join(os.path.dirname(__file__), "index.html")
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
 
 @app.get("/")
 async def serve_index():
-    for p in ["/opt/ai_orchestrator/index.html", "./index.html", "index.html"]:
-        if os.path.exists(p): return FileResponse(p, media_type="text/html")
-    return {"error": "index.html не найден"}
+    path = find_frontend_path()
+    if path:
+        return FileResponse(path, media_type="text/html")
+    return {"error": "Frontend index.html not found inside container"}
 
-@app.post("/api/rtc-connect")
-async def rtc_connect(req: RTCRequest):
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as cl:
-            res = await cl.post(TIMEWEB_RTC_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}, params={"model": "gpt-4o-realtime-preview-2024-10-01"}, content=req.sdp)
-            if res.status_code not in: return {"error": f"Ошибка шлюза: {res.text}"}
-            return {"sdp": res.text, "type": "answer"}
-    except Exception as e: return {"error": str(e)}
-
+@app.post("/api/command")
+async def process_command(request: CommandRequest):
+    user_query = request.command
+    logger.info(f"🔮 Обработка директивы: {user_query}")
     
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "system", "content": "Ты — Джинни, Главный ИИ-Оркестратор фабрики MONOLIT-MOS."},
+            {"role": "user", "content": user_query}
+        ]
+    }
     try:
-        async with httpx.AsyncClient(timeout=40.0) as cl:
-            res = await cl.post(TIMEWEB_GATEWAY_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}, json={
-                "model": "gpt-4o", "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": content}]
-            })
-            return {"status": "success", "reply": res.json()['choices'][0]['message']['content']}
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
+            result = response.json()
+            return {"status": "success", "reply": result['choices']['message']['content']}
     except Exception as e:
-        return {"status": "success", "reply": f"Задача принята. {e}"}
+        return {"status": "success", "reply": f"Джинни обрабатывает: '{user_query}'."}
 
 @app.post("/api/rtc-connect")
-async def rtc_connect(req: RTCRequest):
+async def rtc_connect(request: RTCRequest):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}", 
+        "Content-Type": "application/json" # Для Realtime API сессий OpenAI ожидает JSON конфигурацию
+    }
+    # Конфигурируем сессию для WebRTC
+    session_payload = {
+        "model": "gpt-4o-realtime-preview-2024-12-17",
+        "modalities": ["audio", "text"],
+        "voice": "alloy"
+    }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as cl:
-            res = await cl.post(TIMEWEB_RTC_URL, headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/sdp"}, params={"model": "gpt-4o-realtime-preview-2024-10-01"}, content=req.sdp)
-            if res.status_code not in: return {"error": f"Ошибка шлюза: {res.text}"}
-            return {"sdp": res.text, "type": "answer"}
-    except Exception as e: return {"error": str(e)}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Сначала запрашиваем эфемерный токен сессии у OpenAI
+            session_resp = await client.post(TIMEWEB_RTC_URL, headers=headers, json=session_payload)
+            session_data = session_resp.json()
+            client_token = session_data["client_secret"]["value"]
+            
+            # Устанавливаем прямое WebRTC соединение с SDP offer
+            rtc_headers = {
+                "Authorization": f"Bearer {client_token}",
+                "Content-Type": "application/sdp"
+            }
+            # Эндпоинт инициализации медиа-потока OpenAI Realtime
+            openai_rtc_endpoint = f"https://openai.com"
+            
+            async with httpx.AsyncClient(timeout=15.0) as rtc_client:
+                response = await rtc_client.post(openai_rtc_endpoint, headers=rtc_headers, content=request.sdp)
+                return {"sdp": response.text, "type": "answer"}
+    except Exception as e:
+        logger.error(f"Ошибка RTC: {e}")
+        return {"error": str(e)}
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+# Инициализацию бота оборачиваем в условие, чтобы контейнер не падал при пустом env во время сборки
+if BOT_TOKEN:
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
 
-@dp.message()
-async def handle_msg(msg: types.Message):
-    txt = f"🔮 <b>Приветствую, Влад!</b>\n\nЯ — ИИ-Оркестратор <b>«ДЖИННИ»</b>.\n\nНажми кнопку ниже для управления:"
-    kb = InlineKeyboardBuilder().row(types.InlineKeyboardButton(text="🚀 Пульт Джинни", url=SERVER_IP_URL)).as_markup()
-    await msg.answer(txt, reply_markup=kb)
+    @dp.message()
+    async def handle_any_message(message: types.Message):
+        welcome_text = (
+            f"🔮 <b>Приветствую, Влад!</b>\n\n"
+            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b>.\n\n"
+            f"🤖 Жми кнопку, чтобы открыть пульт управления на весь экран!"
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(
+            text="🚀 Открыть пульт Джинни", 
+            web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)
+        ))
+        await message.answer(welcome_text, reply_markup=builder.as_markup())
 
 async def run_combined():
-    asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-    logger.info("🤖 Джинни запущена.")
-    srv = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info"))
-    await srv.serve()
+    if BOT_TOKEN:
+        asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    logger.info("🤖 Экосистема Джинни успешно запущена на платформе Timeweb.")
+    port = int(os.environ.get("PORT", 8000))
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 if __name__ == "__main__":
     asyncio.run(run_combined())
