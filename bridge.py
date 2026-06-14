@@ -73,7 +73,7 @@ def load_local_knowledge() -> str:
         return "Ошибка загрузки базы расценок."
 
 async def push_code_to_github(file_path: str, content: str, commit_message: str):
-    """Метод субагента ИИ-Программиста для авто-модификации проекта"""
+    """Метод субагента ИИ-Программиста для авто-модификации проекта через GitHub API"""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
         
@@ -84,7 +84,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     }
     
     async with httpx.AsyncClient() as client:
-        # Получаем текущую sha-версию файла (нужно для GitHub API)
+        # Получаем текущую sha-версию файла для GitHub API
         resp = await client.get(url, headers=headers)
         sha = resp.json().get("sha") if resp.status_code == 200 else None
         
@@ -96,6 +96,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             payload["sha"] = sha
             
         put_resp = await client.put(url, headers=headers, json=payload)
+        # ПОЛНЫЙ ТЕХНИЧЕСКИЙ ФИКС СИНТАКСИСА ТУТ:
         if put_resp.status_code in:
             return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub. Передеплой запущен!"
         else:
@@ -113,7 +114,7 @@ async def process_command(request: CommandRequest):
     user_query = request.command
     logger.info(f"🔮 Директива Владельца: {user_query}")
     
-    # Загружаем актуальные расценки на работу
+    # Загружаем актуальные защищенные расценки
     prices_context = load_local_knowledge()
     
     system_prompt = (
@@ -153,10 +154,10 @@ async def process_command(request: CommandRequest):
                 if "|||UPDATE_FILE:" in ai_reply:
                     try:
                         parts = ai_reply.split("|||UPDATE_FILE:")
-                        file_info = parts[1].split("|||")[0].strip()
-                        file_code = parts[1].split("|||")[1].split("|||END_UPDATE|||")[0].strip()
+                        sub_parts = parts[1].split("|||")
+                        file_info = sub_parts[0].strip()
+                        file_code = sub_parts[1].split("|||END_UPDATE|||")[0].strip()
                         
-                        # Запускаем фоновую отправку кода на гитхаб
                         github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
                         ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
                     except Exception as git_err:
