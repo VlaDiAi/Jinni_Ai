@@ -17,17 +17,17 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# ХРАНИМ ТОКЕНА НА ПЛАТФОРМЕ АПП ПЛАТФОРМ
+# БЕЗОПАСНЫЙ ПЕРЕХВАТ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Сюда в панели Timeweb нужно вставить API-ключ, который дает доступ к их агентам
 TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в настройках!")
 
+# ТВОЙ АКТУАЛЬНЫЙ СЕТЕВОЙ ХОСТ НА TIMEWEB
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 
-# ВОЗВРАЩАЕМ ОФИЦИАЛЬНЫЙ ШЛЮЗ ИИ TIMEWEB CLOUD
+# ОФИЦИАЛЬНЫЙ ЭНДПОИНТ ИИ-АГЕНТОВ TIMEWEB CLOUD
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -47,6 +47,7 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
+    """Автоматический поиск index.html внутри контейнера"""
     possible_paths = [
         "index.html", "./index.html", "opt/ai_orchestrator/index.html",
         "/opt/ai_orchestrator/index.html", os.path.join(os.path.dirname(__file__), "index.html")
@@ -81,7 +82,7 @@ async def serve_index():
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command
-    logger.info(f"🔮 Отправка запроса в шлюз Timeweb AI: {user_query}")
+    logger.info(f"🔮 Запрос к ИИ-Агенту Timeweb: {user_query}")
     company_context = get_multi_agent_context()
     
     system_prompt = (
@@ -99,7 +100,7 @@ async def process_command(request: CommandRequest):
         text_content += f"\n\n[Файл сметы: {request.file_name}]"
 
     payload = {
-        "model": "gpt-5-nano",  # ВШИВАЕМ ТОЧНОЕ ТЕХНИЧЕСКОЕ ИМЯ ИЗ ТВОЕЙ ПАНЕЛИ
+        "model": "gpt-5-nano",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text_content}
@@ -113,11 +114,16 @@ async def process_command(request: CommandRequest):
                 result = response.json()
                 return {"status": "success", "reply": result['choices']['message']['content']}
             else:
-                logger.error(f"Ошибка шлюза Timeweb AI: {response.status_code} -> {response.text}")
-                return {"status": "success", "reply": f"Ошибка авторизации агента ({response.status_code}). Проверь токен в панели."}
+                logger.error(f"Ошибка шлюза: {response.status_code} -> {response.text}")
+                return {"status": "success", "reply": f"Ошибка шлюза Timeweb ({response.status_code}): {response.text[:120]}"}
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
-        return {"status": "success", "reply": "Сбой соединения с платформой агентов Timeweb."}
+        return {"status": "success", "reply": f"Системный сбой соединения: {str(e)}"}
+
+@app.post("/api/rtc-connect")
+async def rtc_connect(request: Request):
+    """Шлюз авторизации голосового канала сессии"""
+    return {"status": "success", "client_secret": {"value": f"{TIMEWEB_AI_TOKEN}"}}
 
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -127,7 +133,7 @@ if BOT_TOKEN:
     async def handle_any_message(message: types.Message):
         welcome_text = (
             f"🔮 <b>Приветствую, Влад!</b>\n\n"
-            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b>.\n\n"
+            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n\n"
             f"🤖 Нажми кнопку ниже, чтобы открыть пульт Mini App!"
         )
         builder = InlineKeyboardBuilder()
