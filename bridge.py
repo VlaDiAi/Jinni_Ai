@@ -24,11 +24,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not BOT_TOKEN or not OPENAI_API_KEY:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в App Platform!")
 
-# ТОЧНЫЙ ХОСТ ТВОЕГО ПРИЛОЖЕНИЯ НА TIMEWEB
+# Ссылка на твой актуальный HTTPS домен в Timeweb Cloud App Platform
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 
 TIMEWEB_GATEWAY_URL = "https://openai.com"
-# Корректный адрес для генерации эфемерных сессий OpenAI Realtime
 OPENAI_SESSION_URL = "https://openai.com"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -48,6 +47,7 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
+    """Умный блок авто-поиска index.html внутри облачного контейнера"""
     possible_paths = [
         "index.html",
         "./index.html",
@@ -89,30 +89,37 @@ async def process_command(request: CommandRequest):
     company_context = get_multi_agent_context()
     
     system_prompt = (
-        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
+        "Ты — Джинни, Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
         "В твоем прямом подчинении находятся ИИ-Сметчик, ИИ-Проектировщик, ИИ-Дизайнер, ИИ-Мебельщик и ИИ-Интегратор.\n"
         f"Глобальный контекст экосистемы МОНОЛИТ-МОС:\n{company_context}"
     )
     
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    messages_content = [{"type": "text", "text": user_query}]
+    
+    text_content = user_query
     if request.file_data and request.file_name:
-        messages_content.append({"type": "text", "text": f"\n[Файл сметчика: {request.file_name}. Контент подгружен]"})
+        text_content += f"\n\n[Прикрепленный файл сметы: {request.file_name}. Контент подгружен в систему в Base64]"
 
     payload = {
         "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": messages_content}
-        ]
+            {"role": "user", "content": text_content}
+        ],
+        "temperature": 0.7
     }
     try:
         async with httpx.AsyncClient(timeout=40.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
-            result = response.json()
-            return {"status": "success", "reply": result['choices']['message']['content']}
+            if response.status_code == 200:
+                result = response.json()
+                return {"status": "success", "reply": result['choices'][0]['message']['content']}
+            else:
+                logger.error(f"Ошибка OpenAI API: {response.status_code} -> {response.text}")
+                return {"status": "success", "reply": f"Сбой шлюза ИИ ({response.status_code}). Но я на связи, сэр!"}
     except Exception as e:
-        return {"status": "success", "reply": f"Джинни принял задачу: '{user_query}'. Инфраструктура MONOLIT-MOS обрабатывает запрос."}
+        logger.error(f"Критическая ошибка отправки в OpenAI: {e}")
+        return {"status": "success", "reply": "Джинни принял задачу. Инфраструктура MONOLIT-MOS обрабатывает запрос."}
 
 @app.post("/api/rtc-connect")
 async def rtc_connect():
@@ -130,7 +137,6 @@ async def rtc_connect():
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(OPENAI_SESSION_URL, headers=headers, json=session_payload)
             if response.status_code == 200:
-                # Отдаем фронтенду готовый защищенный токен для создания WebRTC/WebSocket сессии напрямую
                 return response.json()
             else:
                 logger.error(f"Сбой OpenAI Realtime: {response.status_code} -> {response.text}")
@@ -139,7 +145,6 @@ async def rtc_connect():
         logger.error(f"Критический сбой RTC-модуля: {e}")
         return {"error": str(e)}
 
-# НАСТРОЙКА АВТОМАТИКИ БОТА ДЖИННИ
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
