@@ -21,11 +21,11 @@ logger = logging.getLogger("JinniOrchestrator")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Проверка наличия критических ключей при старте контейнера
 if not BOT_TOKEN or not OPENAI_API_KEY:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в App Platform!")
 
-# Ссылка на твой HTTPS домен в Timeweb Cloud App Platform
+# ТОЧНЫЙ ХОСТ ТВОЕГО ПРИЛОЖЕНИЯ НА TIMEWEB
+# Добавляем https://, так как Telegram Mini App строго требует защищенный протокол
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 
 TIMEWEB_GATEWAY_URL = "https://openai.com"
@@ -51,7 +51,6 @@ class RTCRequest(BaseModel):
     type: str
 
 def find_frontend_path():
-    """Умный блок авто-поиска index.html внутри облачного контейнера"""
     possible_paths = [
         "index.html",
         "./index.html",
@@ -95,9 +94,8 @@ async def process_command(request: CommandRequest):
 async def rtc_connect(request: RTCRequest):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}", 
-        "Content-Type": "application/json" # Для Realtime API сессий OpenAI ожидает JSON конфигурацию
+        "Content-Type": "application/json"
     }
-    # Конфигурируем сессию для WebRTC
     session_payload = {
         "model": "gpt-4o-realtime-preview-2024-12-17",
         "modalities": ["audio", "text"],
@@ -105,17 +103,14 @@ async def rtc_connect(request: RTCRequest):
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # Сначала запрашиваем эфемерный токен сессии у OpenAI
             session_resp = await client.post(TIMEWEB_RTC_URL, headers=headers, json=session_payload)
             session_data = session_resp.json()
             client_token = session_data["client_secret"]["value"]
             
-            # Устанавливаем прямое WebRTC соединение с SDP offer
             rtc_headers = {
                 "Authorization": f"Bearer {client_token}",
                 "Content-Type": "application/sdp"
             }
-            # Эндпоинт инициализации медиа-потока OpenAI Realtime
             openai_rtc_endpoint = f"https://openai.com"
             
             async with httpx.AsyncClient(timeout=15.0) as rtc_client:
@@ -125,7 +120,6 @@ async def rtc_connect(request: RTCRequest):
         logger.error(f"Ошибка RTC: {e}")
         return {"error": str(e)}
 
-# Инициализацию бота оборачиваем в условие, чтобы контейнер не падал при пустом env во время сборки
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
