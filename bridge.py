@@ -3,6 +3,7 @@ import asyncio
 import logging
 import sys
 import httpx
+import base64
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -17,21 +18,20 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# БЕЗОПАСНЫЙ ПЕРЕХВАТ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
+# БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Твой токен от GitHub для ИИ-Программиста
+GITHUB_REPO = os.getenv("GITHUB_REPO")    # Формат: "юзернейм/имя_репозитория"
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в настройках!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
-# ТВОЙ АКТУАЛЬНЫЙ СЕТЕВОЙ ХОСТ НА TIMEWEB
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-
-# ОФИЦИАЛЬНЫЙ ЭНДПОИНТ ИИ-АГЕНТОВ TIMEWEB CLOUD
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
-app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
+app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,20 +56,50 @@ def find_frontend_path():
             return path
     return None
 
-def get_multi_agent_context() -> str:
+def load_local_knowledge() -> str:
+    """Динамический сбор расценок и регламентов из базы знаний"""
     context = ""
     try:
         if os.path.exists(KNOWLEDGE_DIR):
-            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
-                file_path = os.path.join(KNOWLEDGE_DIR, file_name)
-                if os.path.exists(file_path):
+            for file_name in os.listdir(KNOWLEDGE_DIR):
+                if file_name.endswith(".txt"):
+                    file_path = os.path.join(KNOWLEDGE_DIR, file_name)
                     with open(file_path, "r", encoding="utf-8") as f:
-                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n"
+                        context += f"\n=== БАЗА РАСЦЕНОК И ЗНАНИЙ: {file_name.upper()} ===\n"
                         context += f.read() + "\n"
-        return context if context else "Системные протоколы МОНОЛИТ-МОС активны."
+        return context if context else "Локальная база расценок пуста. Создайте .txt файлы в jinni_knowledge/."
     except Exception as e:
-        logger.error(f"Ошибка RAG: {e}")
-        return "Системные протоколы МОНОЛИТ-МОС активны."
+        logger.error(f"Ошибка RAG базы расценок: {e}")
+        return "Ошибка загрузки базы расценок."
+
+async def push_code_to_github(file_path: str, content: str, commit_message: str):
+    """Метод субагента ИИ-Программиста для авто-модификации проекта"""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
+        
+    url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        # Получаем текущую sha-версию файла (нужно для GitHub API)
+        resp = await client.get(url, headers=headers)
+        sha = resp.json().get("sha") if resp.status_code == 200 else None
+        
+        payload = {
+            "message": commit_message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8")
+        }
+        if sha:
+            payload["sha"] = sha
+            
+        put_resp = await client.put(url, headers=headers, json=payload)
+        if put_resp.status_code in:
+            return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub. Передеплой запущен!"
+        else:
+            return f"❌ Ошибка GitHub API: {put_resp.text}"
 
 @app.get("/")
 async def serve_index():
@@ -81,74 +111,62 @@ async def serve_index():
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command
-    logger.info(f"🔮 Запрос к ИИ-Оркестратору Джинни: {user_query}")
-    company_context = get_multi_agent_context()
+    logger.info(f"🔮 Директива Владельца: {user_query}")
     
-    # ИНТЕГРАЦИЯ ТВОЕГО БИЗНЕС-МАНИФЕСТА И МУЛЬТИ-АГЕНТНОЙ АРХИТЕКТУРЫ
+    # Загружаем актуальные расценки на работу
+    prices_context = load_local_knowledge()
+    
     system_prompt = (
-        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
-        "В твоем прямом и мгновенном подчинении находится пул специализированных ИИ-субагентов:\n"
-        "- ИИ-Сметчик (парсинг документов, смет и расчет стоимости по прайс-листам)\n"
-        "- ИИ-Проектировщик домов и инженер (архитектурные решения, конструктив, расчет нагрузок)\n"
-        "- ИИ-Дизайнер (планировки, концепты интерьеров, подбор стилей)\n"
-        "- ИИ-Планировщик (этапы работ, графики реализации монолита и отделки)\n\n"
-        "Твоя цель как CEO: Вести диалог как дорогой, экспертный представитель компании MONOLIT-MOS. "
-        "Выявить потребности клиента, координировать работу субагентов, мягко отсекать клиентов, ищущих 'подешевле', "
-        "и закрывать целевого заказчика на БЕСПЛАТНЫЙ ВЫЕЗД ИНЖЕНЕРА-ЗАМЕРЩИКА / АРХИТЕКТОРА на объект.\n\n"
-        "ОБЯЗАТЕЛЬНЫЙ АЛГОРИТМ КВАЛИФИКАЦИИ КЛИЕНТА (выявляй эти пункты в ходе диалога последовательно и ненавязчиво):\n"
-        "1. Тип задачи: Строительство дома с нуля или ремонт под ключ (квартира, офис, дом)?\n"
-        "2. Текущее состояние: Есть ли готовый дизайн-проект / архитектурный проект, или нужно разработать его нашими силами? "
-        "(При необходимости ненавязчиво напоминай, что у нас есть официальные допуски СРО на проектирование!).\n"
-        "3. Параметры: Какова общая площадь объекта (в кв.м)?\n"
-        "4. Локация: Где находится объект (ЖК в Москве или направление/километр по шоссе в МО)?\n\n"
-        "ЖЕСТКИЕ ПРАВИЛА РАБОТЫ С ВОЗРАЖЕНИЯМИ:\n"
-        "- Если клиент сомневается в надежности или запрашивает документы, ты должен заявить строго по протоколу: "
-        "'Мы работаем полностью официально, имеем все возможные допуски СРО на изыскания, проектирование и строительство, "
-        "а также фиксируем в договоре жесткую гарантию 10 лет на монолит.'\n"
-        "- Если клиент просит 'сделать подешевле', ты отвечаешь строго по протоколу: "
-        "'Мы в MONOLIT-MOS работаем строго от уровня Комфорт и Бизнес-класса с использованием сертифицированных материалов премиум-качества, "
-        "поэтому не экономим на надежности. Мы можем предложить оптимизацию сметы за счет проектных решений, но не в ущерб качеству.'\n\n"
-        "ЗАКРЫТИЕ НА ЦЕЛЕВОЕ ДЕЙСТВИЕ:\n"
-        "Как только общая задача клиента понятна, ты должен предложить следующее закрытие: "
-        "'Для точного расчета детальной сметы и оценки технических условий объекта, я предлагаю согласовать выезд нашего инженера-замерщика к вам. "
-        "Это бесплатно. В какой день на этой неделе вам будет удобно встретиться?'\n\n"
-        f"Глобальная база знаний компании MONOLIT-MOS:\n{company_context}"
+        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор, Технический Директор (CTO) и личный ассистент Влада (Владельца MONOLIT-MOS).\n"
+        "Ты общаешься СТРОГО с Владом (сэром), помогаешь ему координировать бизнес и ставить задачи субагентам.\n\n"
+        "В твоем подчинении находятся ИИ-субагенты:\n"
+        "1. ИИ-Сметчик (считает стоимость работ, используя базу расценок Влада).\n"
+        "2. ИИ-Проектировщик (анализирует архитектурные и конструктивные решения).\n"
+        "3. ИИ-Дизайнер (подбирает стили, планировки).\n"
+        "4. ИИ-Планировщик (составляет графики монолитных работ).\n"
+        "5. ИИ-Программист (умеет сам писать код на Python/JS и обновлять файлы через GitHub API).\n\n"
+        f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}\n\n"
+        "ИНСТРУКЦИЯ ДЛЯ ИИ-ПРОГРАММИСТА:\n"
+        "Если Влад просит тебя добавить новую функцию, кнопку, агентскую логику или улучшить скрипт, "
+        "ты должен сгенерировать ПОЛНЫЙ исправленный код и в конце своего текстового ответа ОБЯЗАТЕЛЬНО добавить строго структурированный JSON-блок, "
+        "чтобы субагент-программист перехватил его и отправил коммит в репозиторий.\n"
+        "Формат блока кода в ответе (если нужно обновить файл):\n"
+        "|||UPDATE_FILE:имя_файла.py|||\nтут полный новый код файла\n|||END_UPDATE|||"
     )
     
-    headers = {
-        "Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", 
-        "Content-Type": "application/json"
-    }
-    
-    text_content = user_query
-    if request.file_data and request.file_name:
-        # Если загружен файл — оркестратор Джинни ставит задачу субагенту ИИ-Сметчику
-        text_content += f"\n\n[СИСТЕМНОЕ УВЕДОМЛЕНИЕ: Пользователь прикрепил файл '{request.file_name}'. Джинни, передай этот документ ИИ-Сметчику для парсинга и анализа содержимого в соответствии с прайс-листами компании]."
-
+    headers = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "model": "gpt-5-nano",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text_content}
+            {"role": "user", "content": user_query}
         ],
-        "temperature": 0.3
+        "temperature": 0.2
     }
     try:
         async with httpx.AsyncClient(timeout=40.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code == 200:
-                result = response.json()
-                return {"status": "success", "reply": result['choices']['message']['content']}
+                ai_reply = response.json()['choices']['message']['content']
+                
+                # Логика автоматического перехвата команд ИИ-Программиста
+                if "|||UPDATE_FILE:" in ai_reply:
+                    try:
+                        parts = ai_reply.split("|||UPDATE_FILE:")
+                        file_info = parts[1].split("|||")[0].strip()
+                        file_code = parts[1].split("|||")[1].split("|||END_UPDATE|||")[0].strip()
+                        
+                        # Запускаем фоновую отправку кода на гитхаб
+                        github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
+                        ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
+                    except Exception as git_err:
+                        ai_reply += f"\n\n⚠️ Ошибка авто-модификации кода: {git_err}"
+                        
+                return {"status": "success", "reply": ai_reply}
             else:
-                logger.error(f"Ошибка шлюза: {response.status_code} -> {response.text}")
-                return {"status": "success", "reply": f"Ошибка авторизации шлюза Timeweb ({response.status_code})."}
+                return {"status": "success", "reply": f"Ошибка шлюза Timeweb ({response.status_code})."}
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
-        return {"status": "success", "reply": f"Системный сбой соединения с ядром Джинни: {str(e)}"}
-
-@app.post("/api/rtc-connect")
-async def rtc_connect(request: Request):
-    return {"status": "success", "client_secret": {"value": f"{TIMEWEB_AI_TOKEN}"}}
+        return {"status": "success", "reply": f"Системный сбой соединения: {str(e)}"}
 
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -156,13 +174,9 @@ if BOT_TOKEN:
 
     @dp.message()
     async def handle_any_message(message: types.Message):
-        welcome_text = (
-            f"🔮 <b>Приветствую, Влад!</b>\n\n"
-            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n\n"
-            f"🤖 Нажми кнопку ниже, чтобы открыть пульт Mini App!"
-        )
+        welcome_text = f"🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца."
         builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🚀 Открыть пульт Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
+        builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
         await message.answer(welcome_text, reply_markup=builder.as_markup())
 
 async def run_combined():
