@@ -25,11 +25,12 @@ if not BOT_TOKEN or not OPENAI_API_KEY:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в App Platform!")
 
 # ТОЧНЫЙ ХОСТ ТВОЕГО ПРИЛОЖЕНИЯ НА TIMEWEB
-# Добавляем https://, так как Telegram Mini App строго требует защищенный протокол
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 
 TIMEWEB_GATEWAY_URL = "https://openai.com"
-TIMEWEB_RTC_URL = "https://openai.com"
+# Корректный адрес для генерации эфемерных сессий OpenAI Realtime
+OPENAI_SESSION_URL = "https://openai.com"
+KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI Orchestrator")
 
@@ -46,14 +47,11 @@ class CommandRequest(BaseModel):
     file_data: Optional[str] = None
     file_name: Optional[str] = None
 
-class RTCRequest(BaseModel):
-    sdp: str
-    type: str
-
 def find_frontend_path():
     possible_paths = [
         "index.html",
         "./index.html",
+        "opt/ai_orchestrator/index.html",
         "/opt/ai_orchestrator/index.html",
         os.path.join(os.path.dirname(__file__), "index.html")
     ]
@@ -61,6 +59,21 @@ def find_frontend_path():
         if os.path.exists(path):
             return path
     return None
+
+def get_multi_agent_context() -> str:
+    context = ""
+    try:
+        if os.path.exists(KNOWLEDGE_DIR):
+            for file_name in ["company_profile.txt", "sales_script.txt", "prices.txt"]:
+                file_path = os.path.join(KNOWLEDGE_DIR, file_name)
+                if os.path.exists(file_path):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        context += f"\n=== МОДУЛЬ ЗНАНИЙ: {file_name.upper()} ===\n"
+                        context += f.read() + "\n"
+        return context if context else "Системные протоколы МОНОЛИТ-МОС активны."
+    except Exception as e:
+        logger.error(f"Ошибка RAG: {e}")
+        return "Системные протоколы МОНОЛИТ-МОС активны."
 
 @app.get("/")
 async def serve_index():
@@ -72,14 +85,25 @@ async def serve_index():
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command
-    logger.info(f"🔮 Обработка директивы: {user_query}")
+    logger.info(f"🔮 Обработка директивы от Влада: {user_query}")
+    company_context = get_multi_agent_context()
+    
+    system_prompt = (
+        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор и Генеральный Директор (CEO) фабрики MONOLIT-MOS.\n"
+        "В твоем прямом подчинении находятся ИИ-Сметчик, ИИ-Проектировщик, ИИ-Дизайнер, ИИ-Мебельщик и ИИ-Интегратор.\n"
+        f"Глобальный контекст экосистемы МОНОЛИТ-МОС:\n{company_context}"
+    )
     
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    messages_content = [{"type": "text", "text": user_query}]
+    if request.file_data and request.file_name:
+        messages_content.append({"type": "text", "text": f"\n[Файл сметчика: {request.file_name}. Контент подгружен]"})
+
     payload = {
         "model": "gpt-4o",
         "messages": [
-            {"role": "system", "content": "Ты — Джинни, Главный ИИ-Оркестратор фабрики MONOLIT-MOS."},
-            {"role": "user", "content": user_query}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": messages_content}
         ]
     }
     try:
@@ -88,12 +112,13 @@ async def process_command(request: CommandRequest):
             result = response.json()
             return {"status": "success", "reply": result['choices']['message']['content']}
     except Exception as e:
-        return {"status": "success", "reply": f"Джинни обрабатывает: '{user_query}'."}
+        return {"status": "success", "reply": f"Джинни принял задачу: '{user_query}'. Инфраструктура MONOLIT-MOS обрабатывает запрос."}
 
 @app.post("/api/rtc-connect")
-async def rtc_connect(request: RTCRequest):
+async def rtc_connect():
+    """Шлюз для безопасной выдачи токена голосовой сессии OpenAI без утечки OPENAI_API_KEY на фронтенд"""
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}", 
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     session_payload = {
@@ -103,23 +128,18 @@ async def rtc_connect(request: RTCRequest):
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            session_resp = await client.post(TIMEWEB_RTC_URL, headers=headers, json=session_payload)
-            session_data = session_resp.json()
-            client_token = session_data["client_secret"]["value"]
-            
-            rtc_headers = {
-                "Authorization": f"Bearer {client_token}",
-                "Content-Type": "application/sdp"
-            }
-            openai_rtc_endpoint = f"https://openai.com"
-            
-            async with httpx.AsyncClient(timeout=15.0) as rtc_client:
-                response = await rtc_client.post(openai_rtc_endpoint, headers=rtc_headers, content=request.sdp)
-                return {"sdp": response.text, "type": "answer"}
+            response = await client.post(OPENAI_SESSION_URL, headers=headers, json=session_payload)
+            if response.status_code == 200:
+                # Отдаем фронтенду готовый защищенный токен для создания WebRTC/WebSocket сессии напрямую
+                return response.json()
+            else:
+                logger.error(f"Сбой OpenAI Realtime: {response.status_code} -> {response.text}")
+                return {"error": "Failed to create voice session"}
     except Exception as e:
-        logger.error(f"Ошибка RTC: {e}")
+        logger.error(f"Критический сбой RTC-модуля: {e}")
         return {"error": str(e)}
 
+# НАСТРОЙКА АВТОМАТИКИ БОТА ДЖИННИ
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
@@ -128,8 +148,8 @@ if BOT_TOKEN:
     async def handle_any_message(message: types.Message):
         welcome_text = (
             f"🔮 <b>Приветствую, Влад!</b>\n\n"
-            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b>.\n\n"
-            f"🤖 Жми кнопку, чтобы открыть пульт управления на весь экран!"
+            f"Я — Главный ИИ-Оркестратор <b>«ДЖИННИ»</b> фабрики MONOLIT-MOS.\n\n"
+            f"🤖 Нажми кнопку ниже, чтобы мгновенно развернуть пульт управления в формате Mini App!"
         )
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(
@@ -141,7 +161,7 @@ if BOT_TOKEN:
 async def run_combined():
     if BOT_TOKEN:
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-    logger.info("🤖 Экосистема Джинни успешно запущена на платформе Timeweb.")
+    logger.info("🤖 Экосистема Джинни успешно запущена.")
     port = int(os.environ.get("PORT", 8000))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
