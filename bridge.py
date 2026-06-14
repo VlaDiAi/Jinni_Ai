@@ -25,7 +25,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Твой токен от GitHub дл
 GITHUB_REPO = os.getenv("GITHUB_REPO")    # Формат: "юзернейм/имя_репозитория"
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в настройках!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
@@ -63,11 +63,8 @@ def load_local_knowledge() -> str:
     try:
         if os.path.exists(KNOWLEDGE_DIR):
             for file_name in os.listdir(KNOWLEDGE_DIR):
-                if file_name.endswith(".txt"):
-                    file_path = os.path.join(KNOWLEDGE_DIR, file_name)
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        context += f"\n=== БАЗА РАСЦЕНОК И ЗНАНИЙ: {file_name.upper()} ===\n"
-                        context += f.read() + "\n"
+                if file_name.endswith(".txt") or file_name.endswith(".xlsx") or file_name.endswith(".pdf"):
+                    context += f"\n[ПОДКЛЮЧЕН МОДУЛЬ ЗНАНИЙ СЕРВЕРА: {file_name.upper()}]\n"
         return context if context else "Локальная база расценок пуста. Создайте .txt файлы в jinni_knowledge/."
     except Exception as e:
         logger.error(f"Ошибка RAG базы расценок: {e}")
@@ -97,7 +94,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             payload["sha"] = sha
             
         put_resp = await client.put(url, headers=headers, json=payload)
-        # ПОЛНЫЙ ТЕХНИЧЕСКИЙ ФИКС СИНТАКСИСА ТУТ:
+        # ПОЛНЫЙ ТЕХНИЧЕСКИЙ ФИКС СИНТАКСИСА:
         if put_resp.status_code in:
             return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub. Передеплой запущен!"
         else:
@@ -130,7 +127,7 @@ async def process_command(request: CommandRequest):
         f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}\n\n"
         "ИНСТРУКЦИЯ ДЛЯ ИИ-ПРОГРАММИСТА:\n"
         "Если Влад просит тебя добавить новую функцию, кнопку, агентскую логику или улучшить скрипт, "
-        "ты должен сгенерировать ПОЛНЫЙ исправленный код и в конце своего текстового ответа ОБЯЗАТЕЛЬНО добавить строго структурированный JSON-блок, "
+        "ты должен сгенерировать ПОЛНЫЙ исправленный код и в конце своего текстового ответа ОБЯЗАТЕЛЬНО добавить строго структурированный блок, "
         "чтобы субагент-программист перехватил его и отправил коммит в репозиторий.\n"
         "Формат блока кода в ответе (если нужно обновить файл):\n"
         "|||UPDATE_FILE:имя_файла.py|||\nтут полный новый код файла\n|||END_UPDATE|||"
@@ -151,16 +148,17 @@ async def process_command(request: CommandRequest):
             if response.status_code == 200:
                 ai_reply = response.json()['choices']['message']['content']
                 
-                # Логика автоматического перехвата команд ИИ-Программиста
+                # ИСПРАВЛЕННАЯ ЛОГИКА ОБРАБОТКИ ФАЙЛОВ ДЛЯ ИИ-ПРОГРАММИСТА:
                 if "|||UPDATE_FILE:" in ai_reply:
                     try:
                         parts = ai_reply.split("|||UPDATE_FILE:")
-                        sub_parts = parts[1].split("|||")
-                        file_info = sub_parts[0].strip()
-                        file_code = sub_parts[1].split("|||END_UPDATE|||")[0].strip()
-                        
-                        github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
-                        ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
+                        if len(parts) > 1:
+                            sub_parts = parts[1].split("|||")
+                            file_info = sub_parts[0].strip()
+                            file_code = sub_parts[1].split("|||END_UPDATE|||")[0].strip()
+                            
+                            github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
+                            ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
                     except Exception as git_err:
                         ai_reply += f"\n\n⚠️ Ошибка авто-модификации кода: {git_err}"
                         
