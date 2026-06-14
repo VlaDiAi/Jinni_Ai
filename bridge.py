@@ -21,11 +21,11 @@ logger = logging.getLogger("JinniOrchestrator")
 # БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Твой токен от GitHub для ИИ-Программиста
-GITHUB_REPO = os.getenv("GITHUB_REPO")    # Формат: "юзернейм/имя_репозитория"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
+GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в настройках!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
@@ -47,7 +47,6 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
-    """Автоматический поиск index.html внутри контейнера"""
     possible_paths = [
         "index.html", "./index.html", "opt/ai_orchestrator/index.html",
         "/opt/ai_orchestrator/index.html", os.path.join(os.path.dirname(__file__), "index.html")
@@ -58,20 +57,18 @@ def find_frontend_path():
     return None
 
 def load_local_knowledge() -> str:
-    """Динамический сбор расценок и регламентов из базы знаний"""
     context = ""
     try:
         if os.path.exists(KNOWLEDGE_DIR):
             for file_name in os.listdir(KNOWLEDGE_DIR):
                 if file_name.endswith(".txt") or file_name.endswith(".xlsx") or file_name.endswith(".pdf"):
                     context += f"\n[ПОДКЛЮЧЕН МОДУЛЬ ЗНАНИЙ СЕРВЕРА: {file_name.upper()}]\n"
-        return context if context else "Локальная база расценок пуста. Создайте .txt файлы в jinni_knowledge/."
+        return context if context else "Локальная база расценок пуста."
     except Exception as e:
         logger.error(f"Ошибка RAG базы расценок: {e}")
         return "Ошибка загрузки базы расценок."
 
 async def push_code_to_github(file_path: str, content: str, commit_message: str):
-    """Метод субагента ИИ-Программиста для авто-модификации проекта через GitHub API"""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
         
@@ -82,7 +79,6 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     }
     
     async with httpx.AsyncClient() as client:
-        # Получаем текущую sha-версию файла для GitHub API
         resp = await client.get(url, headers=headers)
         sha = resp.json().get("sha") if resp.status_code == 200 else None
         
@@ -94,9 +90,9 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             payload["sha"] = sha
             
         put_resp = await client.put(url, headers=headers, json=payload)
-        # ПОЛНЫЙ ТЕХНИЧЕСКИЙ ФИКС СИНТАКСИСА:
+        # ИСПРАВЛЕНО НА ВАЛИДНЫЙ МАССИВ КОДОВ СТАТУСА:
         if put_resp.status_code in:
-            return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub. Передеплой запущен!"
+            return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub!"
         else:
             return f"❌ Ошибка GitHub API: {put_resp.text}"
 
@@ -112,7 +108,6 @@ async def process_command(request: CommandRequest):
     user_query = request.command
     logger.info(f"🔮 Директива Владельца: {user_query}")
     
-    # Загружаем актуальные защищенные расценки
     prices_context = load_local_knowledge()
     
     system_prompt = (
@@ -148,7 +143,7 @@ async def process_command(request: CommandRequest):
             if response.status_code == 200:
                 ai_reply = response.json()['choices']['message']['content']
                 
-                # ИСПРАВЛЕННАЯ ЛОГИКА ОБРАБОТКИ ФАЙЛОВ ДЛЯ ИИ-ПРОГРАММИСТА:
+                # ИСПРАВЛЕНА ЛОГИКА СТРОКОВОГО ПАРСИНГА ДЛЯ АВТО-ОБНОВЛЕНИЯ:
                 if "|||UPDATE_FILE:" in ai_reply:
                     try:
                         parts = ai_reply.split("|||UPDATE_FILE:")
