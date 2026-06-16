@@ -155,11 +155,28 @@ HTML_CODE = """
 </html>
 """
 
+class SmartRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Кастомный обработчик, принудительно сохраняющий метод POST и тело при редиректах 307/308"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        newurl = newurl.replace(' ', '%20')
+        # Создаем новый чистый запрос на целевое зеркало с сохранением всех исходных параметров
+        return urllib.request.Request(
+            newurl, 
+            data=req.data, 
+            headers=req.headers, 
+            origin_req_host=req.origin_req_host, 
+            unverifiable=req.unverifiable, 
+            method=req.get_method()
+        )
+
 def sync_urllib_post(url: str, headers: dict, data_bytes: bytes) -> tuple:
-    """Низкоуровневый синхронный POST-запрос, полностью изолированный от сетевых библиотек и прокси ОС"""
+    """Низкоуровневый POST-запрос с поддержкой пробива 308-редиректов"""
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
-    # Принудительно отключаем системные прокси-обработчики на уровне инстанса urllib
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # Соединяем отключение прокси и кастомный менеджер редиректов
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        SmartRedirectHandler()
+    )
     try:
         with opener.open(req, timeout=45) as response:
             return response.status, response.read().decode("utf-8")
@@ -193,7 +210,7 @@ async def process_command(request: CommandRequest):
     headers = {
         "Authorization": f"Bearer {TIMEWEB_AI_TOKEN}",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" # Защита от блокировок по User-Agent
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
     
     payload = {
@@ -208,7 +225,6 @@ async def process_command(request: CommandRequest):
     try:
         data_bytes = json.dumps(payload).encode("utf-8")
         
-        # Выполняем низкоуровневый запрос в изолированном системном потоке thread-pool
         status_code, response_text = await asyncio.to_thread(
             sync_urllib_post, TIMEWEB_GATEWAY_URL, headers, data_bytes
         )
