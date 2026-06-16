@@ -6,7 +6,6 @@ import httpx
 import base64
 import re
 import json
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -31,26 +30,12 @@ if not BOT_TOKEN:
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
-# ЖЕСТКИЙ ФИКС: Классическая инициализация без капризных DefaultBotProperties
+# Абсолютно стабильная инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Контекстный менеджер lifespan для гарантированной регистрации Вебхука
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
-    logger.info(f"📡 Регистрация Webhook в Telegram API: {webhook_url}")
-    try:
-        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-    except Exception as e:
-        logger.error(f"⚠️ Ошибка установки вебхука на старте: {e}")
-    yield
-    try:
-        await bot.delete_webhook()
-    except Exception:
-        pass
-
-app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator", lifespan=lifespan)
+# Инициализируем FastAPI мгновенно без блокирующего lifespan
+app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,7 +107,7 @@ HTML_CODE = """
         <h1>КОГНИТИВНЫЙ КОМПЛЕКС ДЖИННИ</h1>
         <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив.</div></div>
         <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
-        <div id="status" class="status">● Ядро онлайн | Стабильный Webhook</div>
+        <div id="status" class="status">● Ядро онлайн | Параллельный Webhook</div>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
@@ -156,7 +141,7 @@ HTML_CODE = """
                     errDiv.innerText = "Джинни> Сбой локального ядра.";
                     chatLog.appendChild(errDiv);
                 }
-                statusText.innerText = "● Ядро онлайн | Стабильный Webhook";
+                statusText.innerText = "● Ядро онлайн | Параллельный Webhook";
                 chatLog.scrollTop = chatLog.scrollHeight;
             }
         };
@@ -203,10 +188,8 @@ async def handle_any_message(message: types.Message):
     welcome_text = "🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца. Нажмите на кнопку ниже, чтобы войти в пульт."
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
-    # parse_mode перенесён непосредственно в метод отправки для 100% совместимости
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
-# Промышленный шлюз Вебхука
 @app.post("/api/webhook")
 async def telegram_webhook_gateway(request: Request):
     try:
@@ -218,7 +201,21 @@ async def telegram_webhook_gateway(request: Request):
         logger.error(f"Ошибка вебхука Aiogram: {e}")
         return {"status": "error", "detail": str(e)}
 
+async def register_webhook_background():
+    """Фоновая параллельная регистрация вебхука без заморозки основного потока веб-сервера"""
+    await asyncio.sleep(2)  # Даем Uvicorn время захватить порт
+    webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
+    logger.info(f"📡 Фоновая привязка Webhook к Telegram API: {webhook_url}")
+    try:
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info("✅ Вебхук успешно зарегистрирован в фоне!")
+    except Exception as e:
+        logger.error(f"⚠️ Ошибка фоновой привязки вебхука: {e}")
+
 async def main_runtime():
+    # Запускаем регистрацию вебхука параллельно, полностью разблокируя веб-сервер
+    asyncio.create_task(register_webhook_background())
+    
     logger.info("🤖 Экосистема Джинни успешно запущена на Timeweb.")
     port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
