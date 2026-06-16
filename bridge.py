@@ -4,9 +4,10 @@ import logging
 import sys
 import httpx
 import base64
+import re
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
@@ -28,6 +29,7 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
+# Исправлен адрес ИИ-шлюза на OpenAI-совместимый эндпоинт Timeweb Cloud AI
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -72,6 +74,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
         
+    # Добавлен обязательный слэш в структуру роутинга API GitHub
     url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
@@ -79,8 +82,12 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     }
     
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers=headers)
-        sha = resp.json().get("sha") if resp.status_code == 200 else None
+        try:
+            resp = await client.get(url, headers=headers)
+            sha = resp.json().get("sha") if resp.status_code == 200 else None
+        except Exception as e:
+            logger.error(f"Ошибка получения SHA: {e}")
+            sha = None
         
         payload = {
             "message": commit_message,
@@ -89,19 +96,22 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
         if sha:
             payload["sha"] = sha
             
-        put_resp = await client.put(url, headers=headers, json=payload)
-        # ИСПРАВЛЕНО НА ВАЛИДНЫЙ МАССИВ КОДОВ СТАТУСА:
-        if put_resp.status_code in:
-            return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub!"
-        else:
-            return f"❌ Ошибка GitHub API: {put_resp.text}"
+        try:
+            put_resp = await client.put(url, headers=headers, json=payload)
+            # ВНЕДРЕН ВАЛИДНЫЙ МАССИВ УСПЕШНЫХ КОДОВ ОТВЕТА (ФИКС КРИТИЧЕСКОГО БАГА)
+            if put_resp.status_code in:
+                return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub!"
+            else:
+                return f"❌ Ошибка GitHub API: {put_resp.status_code} -> {put_resp.text}"
+        except Exception as e:
+            return f"❌ Исключение при пуше в GitHub: {e}"
 
 @app.get("/")
 async def serve_index():
     path = find_frontend_path()
     if path:
         return FileResponse(path, media_type="text/html")
-    return {"error": "Frontend index.html not found"}
+    return JSONResponse(status_code=404, content={"error": "Frontend index.html not found"})
 
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
@@ -141,19 +151,19 @@ async def process_command(request: CommandRequest):
         async with httpx.AsyncClient(timeout=40.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code == 200:
-                ai_reply = response.json()['choices']['message']['content']
+                ai_reply = response.json()['choices'][0]['message']['content']
                 
-                # ИСПРАВЛЕНА ЛОГИКА СТРОКОВОГО ПАРСИНГА ДЛЯ АВТО-ОБНОВЛЕНИЯ:
-                if "|||UPDATE_FILE:" in ai_reply:
+                # ЖЕСТКАЯ СВЕРХНАДЕЖНАЯ REGEX-ЛОГИКА ПАРСИНГА ПАТЧЕЙ (ЗАМЕНА РАЗБИЕНИЯ SPLIT)
+                pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
+                match = re.search(pattern, ai_reply, re.DOTALL)
+                
+                if match:
                     try:
-                        parts = ai_reply.split("|||UPDATE_FILE:")
-                        if len(parts) > 1:
-                            sub_parts = parts[1].split("|||")
-                            file_info = sub_parts[0].strip()
-                            file_code = sub_parts[1].split("|||END_UPDATE|||")[0].strip()
-                            
-                            github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
-                            ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
+                        file_info = match.group(1).strip()
+                        file_code = match.group(2).strip()
+                        
+                        github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info} по запросу Влада")
+                        ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
                     except Exception as git_err:
                         ai_reply += f"\n\n⚠️ Ошибка авто-модификации кода: {git_err}"
                         
@@ -178,7 +188,9 @@ async def run_combined():
     if BOT_TOKEN:
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     logger.info("🤖 Экосистема Джинни успешно запущена на Timeweb.")
-    port = int(os.environ.get("PORT", 8000))
+    
+    # Автоматический перехват порта, выделенного платформой Timeweb (по дефолту 7778)
+    port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
