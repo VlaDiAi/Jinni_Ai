@@ -27,7 +27,6 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# ИСПРАВЛЕНО: Установлен валидный OpenAI-совместимый эндпоинт ИИ-шлюза Timeweb Cloud
 TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -60,7 +59,7 @@ def load_local_knowledge() -> str:
 
 async def push_code_to_github(file_path: str, content: str, commit_message: str):
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return "Ошибка: Не настроены переменные GITHUB_TOKEN or GITHUB_REPO."
+        return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
         
     url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
@@ -185,8 +184,8 @@ async def process_command(request: CommandRequest):
                         ai_reply += f"\n\n⚠️ Ошибка: {git_err}"
                 return {"reply": ai_reply}
             
-            # Улучшенная диагностика: выводим сырой текст ошибки шлюза, если статус не 200
-            err_body = await response.text()
+            # ФИКС: Удалены круглые скобки и await у response.text, убран вызов свойства как функции
+            err_body = response.text
             return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
     except Exception as e:
         return {"reply": f"Системный сбой соединения: {str(e)}"}
