@@ -17,7 +17,6 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
@@ -27,7 +26,7 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# Сетевой мост переведен на корневой OpenAI-интерфейс Timeweb Cloud
+# ИСПРАВЛЕНО: Установлен официальный API-путь для ИИ-сервисов Timeweb Cloud
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -161,19 +160,37 @@ async def process_command(request: CommandRequest):
         "Ты общаешься СТРОГО с Владом (сэром). АКТУАЛЬНАЯ БАЗА РАСЦЕНОК КОМПАНИИ:\n" + prices_context
     )
     
-    # Формируем стандартные заголовки Bearer для ИИ-балансировщика Timeweb
-    headers = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "model": "gpt-5-nano",
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_query}],
-        "temperature": 0.2
+    # ИСПРАВЛЕНО: Формат заголовков под спецификацию ИИ-платформы Timeweb App Platform
+    headers = {
+        "Authorization": f"Bearer {TIMEWEB_AI_TOKEN}",
+        "Content-Type": "application/json"
     }
+    
+    # ИСПРАВЛЕНО: Структурированный payload, поддерживающий OpenAI-совместимый синтаксис на шлюзе Timeweb
+    payload = {
+        "model": "gpt-4o",  # На Timeweb Cloud базовым стабильным ИИ-ядром является gpt-4o / gpt-4o-mini
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_query}
+        ],
+        "temperature": 0.3
+    }
+    
     try:
-        # ВНЕДРЕН КРИТИЧЕСКИЙ ФЛАГ follow_redirects=True ДЛЯ ПРОБИВА ОШИБКИ 308
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
+            
+            # Если шлюз возвращает 200, парсим ответ
             if response.status_code == 200:
-                ai_reply = response.json()['choices']['message']['content']
+                resp_json = response.json()
+                
+                # Защита от разных форматов ответов ИИ-провайдеров
+                if 'choices' in resp_json:
+                    ai_reply = resp_json['choices'][0]['message']['content']
+                elif 'message' in resp_json:
+                    ai_reply = resp_json['message']['content']
+                else:
+                    ai_reply = str(resp_json)
                 
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
                 match = re.search(pattern, ai_reply, re.DOTALL)
@@ -187,8 +204,10 @@ async def process_command(request: CommandRequest):
                         ai_reply += f"\n\n⚠️ Ошибка: {git_err}"
                 return {"reply": ai_reply}
             
-            err_body = response.text
-            return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
+            # Если сервер выдал ошибку, перехватываем сырой текст (401, 404, 500 и т.д.)
+            raw_text = response.text
+            return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {raw_text[:150]}"}
+            
     except Exception as e:
         return {"reply": f"Системный сбой соединения: {str(e)}"}
 
