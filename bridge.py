@@ -1,3 +1,87 @@
+import os
+import asyncio
+import logging
+import sys
+import httpx
+import base64
+import re
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
+from pydantic import BaseModel
+from typing import Optional
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import uvicorn
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger("JinniOrchestrator")
+
+# БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
+GITHUB_REPO = os.getenv("GITHUB_REPO")    
+
+if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+
+WEBAPP_HTTPS_URL = "https://twc1.net" 
+TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
+KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
+
+app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class CommandRequest(BaseModel):
+    command: str
+    file_data: Optional[str] = None
+    file_name: Optional[str] = None
+
+def load_local_knowledge() -> str:
+    context = ""
+    try:
+        if os.path.exists(KNOWLEDGE_DIR):
+            for file_name in os.listdir(KNOWLEDGE_DIR):
+                if file_name.endswith(".txt") or file_name.endswith(".xlsx") or file_name.endswith(".pdf"):
+                    context += f"\n[ПОДКЛЮЧЕН МОДУЛЬ ЗНАНИЙ СЕРВЕРА: {file_name.upper()}]\n"
+        return context if context else "Локальная база расценок пуста."
+    except Exception as e:
+        logger.error(f"Ошибка RAG базы расценок: {e}")
+        return "Ошибка загрузки базы расценок."
+
+async def push_code_to_github(file_path: str, content: str, commit_message: str):
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
+        
+    url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, headers=headers, timeout=10)
+            sha = resp.json().get("sha") if resp.status_code == 200 else None
+        except Exception as e:
+            sha = None
+        
+        payload = {"message": commit_message, "content": base64.b64encode(content.encode("utf-8")).decode("utf-8")}
+        if sha:
+            payload["sha"] = sha
+            
+        try:
+            put_resp = await client.put(url, headers=headers, json=payload, timeout=15)
+            if put_resp.status_code in:
+                return "✅ Код запушен на GitHub!"
+            return f"❌ Ошибка API: {put_resp.status_code}"
+        except Exception as e:
+            return f"❌ Ошибка: {e}"
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     # На лету отдаем чистую, неубиваемую неоновую веб-панель Джинни без чтения файлов с диска
