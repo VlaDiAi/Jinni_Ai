@@ -24,10 +24,11 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в панели!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
+# ИСПРАВЛЕНО: Установлен валидный OpenAI-совместимый эндпоинт ИИ-шлюза Timeweb Cloud
+TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
@@ -59,7 +60,7 @@ def load_local_knowledge() -> str:
 
 async def push_code_to_github(file_path: str, content: str, commit_message: str):
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
+        return "Ошибка: Не настроены переменные GITHUB_TOKEN or GITHUB_REPO."
         
     url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
@@ -77,13 +78,11 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             
         try:
             put_resp = await client.put(url, headers=headers, json=payload, timeout=15)
-            # ФИКС КРИТИЧЕСКОГО БАГА: СИНТАКСИС МАССИВА СТАТУСОВ ЗАКРЫТ КОРТЕЖЕМ (200, 201)
             if put_resp.status_code in (200, 201):
                 return "✅ Код запушен на GitHub!"
             return f"❌ Ошибка API: {put_resp.status_code}"
         except Exception as e:
             return f"❌ Ошибка: {e}"
-# Неубиваемый неоновый веб-интерфейс, зашитый прямо в оперативную память приложения
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -135,7 +134,7 @@ HTML_CODE = """
                     chatLog.appendChild(replyDiv);
                 } catch {
                     const errDiv = document.createElement('div');
-                    errDiv.innerText = "Джинни> Сбой шлюза.";
+                    errDiv.innerText = "Джинни> Сбой соединения.";
                     chatLog.appendChild(errDiv);
                 }
                 statusText.innerText = "● Ядро онлайн | Порт: 7778";
@@ -184,13 +183,15 @@ async def process_command(request: CommandRequest):
                         ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
                     except Exception as git_err:
                         ai_reply += f"\n\n⚠️ Ошибка: {git_err}"
-                return {"status": "success", "reply": ai_reply}
-            return {"status": "success", "reply": f"Ошибка шлюза: {response.status_code}"}
+                return {"reply": ai_reply}
+            
+            # Улучшенная диагностика: выводим сырой текст ошибки шлюза, если статус не 200
+            err_body = await response.text()
+            return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
     except Exception as e:
-        return {"status": "success", "reply": f"Сбой: {str(e)}"}
+        return {"reply": f"Системный сбой соединения: {str(e)}"}
 
 if BOT_TOKEN:
-    # Зафиксирована корректная строковая инициализация parse_mode
     default_properties = {"parse_mode": "HTML"}
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(**default_properties))
     dp = Dispatcher()
