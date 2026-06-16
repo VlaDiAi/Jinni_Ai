@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
 
@@ -32,11 +31,11 @@ if not BOT_TOKEN:
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
-# Инициализация бота с безопасной передачей параметров parse_mode
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+# ЖЕСТКИЙ ФИКС: Классическая инициализация без капризных DefaultBotProperties
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Современный контекстный менеджер lifespan для гарантированной регистрации Вебхука в Telegram API
+# Контекстный менеджер lifespan для гарантированной регистрации Вебхука
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
@@ -123,7 +122,7 @@ HTML_CODE = """
         <h1>КОГНИТИВНЫЙ КОМПЛЕКС ДЖИННИ</h1>
         <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив.</div></div>
         <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
-        <div id="status" class="status">● Ядро онлайн | Вебхук активен</div>
+        <div id="status" class="status">● Ядро онлайн | Стабильный Webhook</div>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
@@ -157,7 +156,7 @@ HTML_CODE = """
                     errDiv.innerText = "Джинни> Сбой локального ядра.";
                     chatLog.appendChild(errDiv);
                 }
-                statusText.innerText = "● Ядро онлайн | Вебхук активен";
+                statusText.innerText = "● Ядро онлайн | Стабильный Webhook";
                 chatLog.scrollTop = chatLog.scrollHeight;
             }
         };
@@ -201,12 +200,13 @@ async def process_command(request: CommandRequest):
 
 @dp.message()
 async def handle_any_message(message: types.Message):
-    welcome_text = f"🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца. Нажмите на кнопку ниже, чтобы войти в пульт."
+    welcome_text = "🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца. Нажмите на кнопку ниже, чтобы войти в пульт."
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
-    await message.answer(welcome_text, reply_markup=builder.as_markup())
+    # parse_mode перенесён непосредственно в метод отправки для 100% совместимости
+    await message.answer(welcome_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
-# Промышленный шлюз Вебхука, работающий в основном потоке FastAPI
+# Промышленный шлюз Вебхука
 @app.post("/api/webhook")
 async def telegram_webhook_gateway(request: Request):
     try:
