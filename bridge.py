@@ -6,6 +6,7 @@ import httpx
 import base64
 import re
 import json
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -31,7 +32,26 @@ if not BOT_TOKEN:
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
-app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
+# Инициализация бота с безопасной передачей параметров parse_mode
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+dp = Dispatcher()
+
+# Современный контекстный менеджер lifespan для гарантированной регистрации Вебхука в Telegram API
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
+    logger.info(f"📡 Регистрация Webhook в Telegram API: {webhook_url}")
+    try:
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"⚠️ Ошибка установки вебхука на старте: {e}")
+    yield
+    try:
+        await bot.delete_webhook()
+    except Exception:
+        pass
+
+app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -103,7 +123,7 @@ HTML_CODE = """
         <h1>КОГНИТИВНЫЙ КОМПЛЕКС ДЖИННИ</h1>
         <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив.</div></div>
         <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
-        <div id="status" class="status">● Ядро онлайн | ИИ-Эмулятор активен</div>
+        <div id="status" class="status">● Ядро онлайн | Вебхук активен</div>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
@@ -137,7 +157,7 @@ HTML_CODE = """
                     errDiv.innerText = "Джинни> Сбой локального ядра.";
                     chatLog.appendChild(errDiv);
                 }
-                statusText.innerText = "● Ядро онлайн | ИИ-Эмулятор активен";
+                statusText.innerText = "● Ядро онлайн | Вебхук активен";
                 chatLog.scrollTop = chatLog.scrollHeight;
             }
         };
@@ -179,10 +199,6 @@ async def process_command(request: CommandRequest):
 
     return {"reply": ai_reply}
 
-# Инициализация бота в глобальном пространстве
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher()
-
 @dp.message()
 async def handle_any_message(message: types.Message):
     welcome_text = f"🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца. Нажмите на кнопку ниже, чтобы войти в пульт."
@@ -190,10 +206,9 @@ async def handle_any_message(message: types.Message):
     builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
     await message.answer(welcome_text, reply_markup=builder.as_markup())
 
-# === КРИТИЧЕСКИЙ ЭНДПОИНТ ВЕБХУКА ДЛЯ TELEGRAM API ===
+# Промышленный шлюз Вебхука, работающий в основном потоке FastAPI
 @app.post("/api/webhook")
 async def telegram_webhook_gateway(request: Request):
-    """Шлюз мгновенного приема команд от серверов Telegram (Замена зависающего полинга)"""
     try:
         json_data = await request.json()
         update = types.Update.model_validate(json_data, context={"bot": bot})
@@ -203,15 +218,8 @@ async def telegram_webhook_gateway(request: Request):
         logger.error(f"Ошибка вебхука Aiogram: {e}")
         return {"status": "error", "detail": str(e)}
 
-# Автоматический триггер установки Вебхука при старте FastAPI
-@app.on_event("startup")
-async def on_startup_setup_webhook():
-    webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
-    logger.info(f"📡 Регистрация Webhook в Telegram API: {webhook_url}")
-    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-
 async def main_runtime():
-    logger.info("🤖 Экосистема Джинни успешно запущена в режиме Webhook на Timeweb.")
+    logger.info("🤖 Экосистема Джинни успешно запущена на Timeweb.")
     port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
