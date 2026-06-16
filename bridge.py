@@ -11,29 +11,32 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import uvicorn
+from openai import AsyncOpenAI
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-# БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
+# БЕЗОПАСНЫЙ ПЕРЕХВАТ ПЕРЕМЕННЫХ ИЗ ПАНЕЛИ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
-# ДВОЙНАЯ СТРАХОВКА КЛЮЧА: перехват по любому из двух системных имен
-TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY")
+# Двойная страховка перехвата ИИ-ключа
+TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или ИИ-ключ не найдены в панели Timeweb!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# Канонический верифицированный эндпоинт из официальной документации Timeweb Cloud
-TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
-MODEL_NAME = "openai/gpt-5-nano"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
+
+# Инициализируем официальный клиент OpenAI SDK строго по документации Timeweb AI Gateway
+ai_client = AsyncOpenAI(
+    api_key=TIMEWEB_AI_TOKEN,
+    base_url="https://api.timeweb.ai/v1"
+)
+MODEL_NAME = "openai/gpt-5-nano"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
 
@@ -172,48 +175,38 @@ async def process_command(request: CommandRequest):
         f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}"
     )
     
-    headers = {
-        "Authorization": f"Bearer {TIMEWEB_AI_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_query}
-        ],
-        "temperature": 0.2
-    }
-    
     try:
-        # ВНЕДРЕН КРИТИЧЕСКИЙ СЕТЕВОЙ ФЛАГ follow_redirects=True ДЛЯ ПРОБИВА ОШИБКИ 308
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                data = response.json()
-                ai_reply = data["choices"][0]["message"]["content"]
-                
-                pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
-                match = re.search(pattern, ai_reply, re.DOTALL)
-                if match:
-                    try:
-                        file_info = match.group(1).strip()
-                        file_code = match.group(2).strip()
-                        github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info}")
-                        ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
-                    except Exception as git_err:
-                        ai_reply += f"\n\n⚠️ Ошибка коммита: {git_err}"
-                return {"reply": ai_reply}
-            
-            err_body = response.text
-            return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
+        # Прямой вызов через официальный SDK OpenAI. Исключает пересечение роутов httpx.
+        response = await ai_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query}
+            ],
+            temperature=0.2,
+            timeout=60.0
+        )
+        
+        ai_reply = response.choices[0].message.content
+        
+        pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
+        match = re.search(pattern, ai_reply, re.DOTALL)
+        if match:
+            try:
+                file_info = match.group(1).strip()
+                file_code = match.group(2).strip()
+                github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info}")
+                ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
+            except Exception as git_err:
+                ai_reply += f"\n\n⚠️ Ошибка коммита: {git_err}"
+        return {"reply": ai_reply}
             
     except Exception as e:
-        return {"reply": f"Системный сбой соединения: {str(e)}"}
+        logger.error(f"Критический сбой ИИ-шлюза SDK: {e}")
+        return {"reply": f"Системный сбой SDK-соединения: {str(e)}"}
 
 if BOT_TOKEN:
+    from aiogram.client.default import DefaultBotProperties
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
 
