@@ -15,9 +15,9 @@ import openpyxl
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("JinniSmetterOrchestrator")
+logger = logging.getLogger("JinniSmetterBatchOrchestrator")
 
-app = FastAPI(title="MONOLIT-MOS Smetter Orchestrator")
+app = FastAPI(title="MONOLIT-MOS Batch Smetter Orchestrator")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,14 +32,49 @@ class CommandRequest(BaseModel):
     file_data_list: Optional[List[str]] = None  
     file_name_list: Optional[List[str]] = None
 
-# ЖЕСТКАЯ ИНТЕГРАЦИЯ: Ваша официальная база расценок из Сметтера зашита прямо в ОЗУ
-SMETTER_CATALOG = [
-    {"name": "Выравнивание и покраска стен под ключ", "unit": "м2", "price_work": 1200.0, "price_mat": 450.0},
-    {"name": "Укладка замкового кварцвинила под ключ", "unit": "м2", "price_work": 850.0, "price_mat": 2100.0},
-    {"name": "Монтаж напольного пластикового плинтуса", "unit": "мп", "price_work": 350.0, "price_mat": 180.0},
-    {"name": "Грунтовка поверхностей глубокого проникновения", "unit": "м2", "price_work": 150.0, "price_mat": 70.0},
-    {"name": "Шпатлевка стен под покраску (2 слоя)", "unit": "м2", "price_work": 450.0, "price_mat": 220.0}
-]
+def load_smetter_catalog() -> list:
+    """
+    Субагент-Сметчик: Автоматически сканирует корень приложения /app/ на наличие 
+    вашего выгруженного из Сметтера Excel-файла с ценами и кэширует его в ОЗУ.
+    """
+    catalog_items = []
+    # На Timeweb App Platform корень репозитория монтируется в папку /app
+    target_dir = "./" if os.path.exists("requirements.txt") else "/app/"
+    
+    try:
+        for f_name in os.listdir(target_dir):
+            # Ищем файл расценок (исключая временные файлы выгрузки смет)
+            if (f_name.endswith(".xlsx") or f_name.endswith(".xls")) and "estimate_output" not in f_name:
+                file_path = os.path.join(target_dir, f_name)
+                logger.info(f"📚 Найдена база расценок Сметтера: {f_name}. Начинаю импорт в ОЗУ...")
+                
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                ws = wb.active
+                
+                # Сканируем строки со 2 по 1000 (пропуская шапку таблицы Сметтера)
+                for row in ws.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
+                    if not row or not row[0] or "раздел" in str(row[0]).lower():
+                        continue
+                        
+                    name = str(row[0]).strip()
+                    unit = str(row[1]).strip() if row[1] else "м2"
+                    
+                    # Интеллектуальный перехват цен работы и материала из колонок Сметтера
+                    price_work = float(row[2]) if len(row) > 2 and isinstance(row[2], (int, float)) else 0.0
+                    price_mat = float(row[3]) if len(row) > 3 and isinstance(row[3], (int, float)) else 0.0
+                    
+                    catalog_items.append({
+                        "name": name,
+                        "unit": unit,
+                        "price_work": price_work,
+                        "price_mat": price_mat
+                    })
+        if catalog_items:
+            logger.info(f"✅ База расценок успешно зафиксирована: {len(catalog_items)} позиций Сметтера в ОЗУ.")
+        return catalog_items
+    except Exception as e:
+        logger.error(f"⚠️ Ошибка авто-чтения файла расценок Excel: {e}")
+        return catalog_items
 
 def parse_single_excel_bytes(file_bytes: bytes) -> dict:
     metrics = {"floor_area": 0.0, "wall_area": 0.0, "perimeter": 0.0}
@@ -84,7 +119,7 @@ HTML_CODE = """
 <body>
     <div class="panel">
         <h1>МУЛЬТИ-ВЕДОМОСТЬ MONOLIT-MOS</h1>
-        <div id="chatLog" class="chat-log"><div>Джинни> Выделите файлы Excel замеров (Ctrl) и нажмите Enter. Сводный импорт посчитается из памяти ОЗУ.</div></div>
+        <div id="chatLog" class="chat-log"><div>Джинни> Выделите файлы Excel замеров (Ctrl) и нажмите Enter. Сводный расчет пойдет по вашей базе Сметтера.</div></div>
         <div id="previewBox" class="preview-box">📦 Выбрано файлов (<span id="fileCount">0</span>):<div id="fileListNames" style="color:#00ffff; margin-top:5px;"></div></div>
         <div class="input-area">
             <label for="fileInput" class="file-label">📎</label>
@@ -92,7 +127,7 @@ HTML_CODE = """
             <input type="text" id="textInput" class="text-input" placeholder="Директива по расчету...">
         </div>
         <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_monolit.xlsx">📥 СКАЧАТЬ СВОДНУЮ СМЕТУ</a>
-        <div id="status" class="status">● Пакетный конвейер ОЗУ активен</div>
+        <div id="status" class="status">● Пакетный конвейер Сметтера готов</div>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
@@ -152,7 +187,7 @@ HTML_CODE = """
                     errDiv.innerText = "Джинни> Ошибка пакетной сборки.";
                     chatLog.appendChild(errDiv);
                 }
-                statusText.innerText = "● Пакетный конвейер ОЗУ активен";
+                statusText.innerText = "● Пакетный конвейер Сметтера готов";
                 chatLog.scrollTop = chatLog.scrollHeight;
                 fileBase64Array = []; fileNameArray = []; previewBox.style.display = 'none'; fileInput.value = "";
             }
@@ -167,10 +202,10 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
         ws = wb.active
         ws.title = "Сводный Импорт Сметтер"
         ws.views.sheetView.showGridLines = True
-        font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-        fill_header = PatternFill(start_color="1A1A1A", end_color="1A1A1A", fill_type="solid")
-        thin_side = Side(border_style="thin", color="CCCCCC")
-        border_data = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        font_header = openpyxl.styles.Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        fill_header = openpyxl.styles.PatternFill(start_color="1A1A1A", end_color="1A1A1A", fill_type="solid")
+        thin_side = openpyxl.styles.Side(border_style="thin", color="CCCCCC")
+        border_data = openpyxl.styles.Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
         
         headers = ["Тип", "Наименование позиции (Работы / Материалы)", "Ед. изм.", "Количество", "Цена (руб.)", "Итого (руб.)"]
         ws.append(headers)
@@ -178,7 +213,7 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
             cell = ws.cell(row=1, column=col_num)
             cell.font = font_header
             cell.fill = fill_header
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
 
         for item in calculated_items:
             row_data = [item["type"], item["name"], item["unit"], float(item["volume"]), float(item["price"]), float(item["volume"]) * float(item["price"])]
@@ -210,6 +245,7 @@ async def download_estimate():
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
     user_query = request.command.strip().lower()
+    smetter_catalog = load_smetter_catalog()
     total_floor, total_walls, total_perimeter = 0.0, 0.0, 0.0
     
     if request.file_data_list:
@@ -226,20 +262,27 @@ async def process_command(request: CommandRequest):
     if total_floor == 0: total_floor, total_walls, total_perimeter = 45.0, 110.0, 32.0
     output_estimate_rows = []
     
-    for catalog_item in SMETTER_CATALOG:
-        item_name_lower = catalog_item["name"].lower()
-        if "стен" in item_name_lower or "обои" in item_name_lower or "покраск" in item_name_lower or "шпатлевк" in item_name_lower: volume = total_walls
-        elif "пол" in item_name_lower or "кварцвинил" in item_name_lower: volume = total_floor
-        elif "плинтус" in item_name_lower or "периметр" in item_name_lower: volume = total_perimeter
-        else: volume = total_floor
-            
-        if catalog_item["price_work"] > 0:
-            output_estimate_rows.append({"type": "Работа", "name": catalog_item["name"], "unit": catalog_item["unit"], "volume": volume, "price": catalog_item["price_work"]})
-        if catalog_item["price_mat"] > 0:
-            output_estimate_rows.append({"type": "Материал", "name": f"{catalog_item['name']} (Материал)", "unit": catalog_item["unit"], "volume": volume * 1.05 if catalog_item["unit"] == "м2" else volume, "price": catalog_item["price_mat"]})
+    if smetter_catalog:
+        for catalog_item in smetter_catalog:
+            item_name_lower = catalog_item["name"].lower()
+            if "стен" in item_name_lower or "обои" in item_name_lower or "покраск" in item_name_lower or "шпатлевк" in item_name_lower: volume = total_walls
+            elif "пол" in item_name_lower or "кварцвинил" in item_name_lower: volume = total_floor
+            elif "плинтус" in item_name_lower or "периметр" in item_name_lower: volume = total_perimeter
+            else: volume = total_floor
+                
+            if catalog_item["price_work"] > 0:
+                output_estimate_rows.append({"type": "Работа", "name": catalog_item["name"], "unit": catalog_item["unit"], "volume": volume, "price": catalog_item["price_work"]})
+            if catalog_item["price_mat"] > 0:
+                output_estimate_rows.append({"type": "Материал", "name": f"{catalog_item['name']} (Материал)", "unit": catalog_item["unit"], "volume": volume * 1.05 if catalog_item["unit"] == "м2" else volume, "price": catalog_item["price_mat"]})
+    else:
+        output_estimate_rows = [
+            {"type": "Работа", "name": "Сводное выравнивание стен (Каталог не найден)", "unit": "м2", "volume": total_walls, "price": 1200.0},
+            {"type": "Работа", "name": "Сводная укладка кварцвинила (Каталог не найден)", "unit": "м2", "volume": total_floor, "price": 850.0}
+        ]
 
     generate_smetter_excel(output_estimate_rows)
-    ai_reply = f"Сэр, пакетный расчет выполнен напрямую из ОЗУ! Объединено {len(request.file_name_list or [])} ведомостей. Итоговые объемы: Пол = {total_floor} м², Стены = {total_walls} м², Периметр = {total_perimeter} мп. Расценки взяты из встроенной базы Сметтера. Сводный шаблон собран!"
+    catalog_status = f"Успешно подтянуто {len(smetter_catalog)} расценок Сметтера из вашего загруженного прайса." if smetter_catalog else "Каталог цен не обнаружен в корне репозитория."
+    ai_reply = f"Сэр, пакетный расчет выполнен! Объединено {len(request.file_name_list or [])} ведомостей. Итоговые объемы: Пол = {total_floor} м², Стены = {total_walls} м², Периметр = {total_perimeter} мп. {catalog_status} Сводный шаблон собран!"
     return {"reply": ai_reply, "has_estimate": True}
 
 if __name__ == "__main__":
