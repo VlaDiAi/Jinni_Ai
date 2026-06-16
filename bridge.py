@@ -11,7 +11,6 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
@@ -34,7 +33,6 @@ KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
 
-# КРИТИЧЕСКИЙ CORS MIDDLEWARE ДЛЯ TELEGRAM MINI APP (УНИЧТОЖЕНИЕ БЛОКИРОВОК)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,7 +47,6 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
-    # На Timeweb App Platform код репозитория монтируется в директорию /app/
     possible_paths = [
         "index.html", 
         "./index.html", 
@@ -79,7 +76,6 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return "Ошибка: Не настроены переменные GITHUB_TOKEN или GITHUB_REPO."
         
-    # Добавлен обязательный слэш в структуру роутинга API GitHub
     url = f"https://github.com{GITHUB_REPO}/contents/{file_path}"
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
@@ -103,7 +99,6 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             
         try:
             put_resp = await client.put(url, headers=headers, json=payload, timeout=15)
-            # ВНЕДРЕН ВАЛИДНЫЙ МАССИВ УСПЕШНЫХ КОДОВ ОТВЕТА (ФИКС КРИТИЧЕСКОГО БАГА)
             if put_resp.status_code in:
                 return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub!"
             else:
@@ -116,16 +111,12 @@ async def serve_index():
     path = find_frontend_path()
     if path:
         return FileResponse(path, media_type="text/html")
-    # Диагностический экран вместо слепого белого экрана при отсутствии фронтенда
     return """
     <html>
         <head><meta charset="UTF-8"><title>Диагностика MONOLIT-MOS</title></head>
         <body style="background-color: #0d0e15; color: #ff0055; font-family: sans-serif; text-align: center; padding-top: 100px;">
             <h1 style="font-size: 28px;">🚨 Бэкенд запущен, но index.html не найден в контейнере /app/!</h1>
-            <p style="color: #ffffff; font-size: 16px;">Сэр, убедитесь, что на сайте GitHub файл <b>index.html</b> лежит в самом корне репозитория <b>VladiAi/Jinni_Ai</b> и назван маленькими буквами.</p>
-            <div style="margin-top: 30px; padding: 15px; background: #141622; display: inline-block; border-radius: 5px; color: #00ffcc;">
-                Статус ядра Джинни: ONLINE | Порт: Инициализирован
-            </div>
+            <p style="color: #ffffff; font-size: 16px;">Сэр, убедитесь, что на сайте GitHub файл <b>index.html</b> лежит в самом корне репозитория <b>VladiAi/Jinni_Ai</b>.</p>
         </body>
     </html>
     """
@@ -165,12 +156,12 @@ async def process_command(request: CommandRequest):
         "temperature": 0.2
     }
     try:
-        async with httpx.AsyncClient(timeout=40.0) as client:
+        # Увеличен таймаут до 60 секунд для обработки тяжелых ИИ-смет
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code == 200:
                 ai_reply = response.json()['choices'][0]['message']['content']
                 
-                # НАДЕЖНАЯ REGEX-ЛОГИКА ПАРСИНГА ПАТЧЕЙ (ЗАМЕНА СБОЙНОГО SPLIT)
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
                 match = re.search(pattern, ai_reply, re.DOTALL)
                 
@@ -191,7 +182,8 @@ async def process_command(request: CommandRequest):
         return {"status": "success", "reply": f"Системный сбой соединения: {str(e)}"}
 
 if BOT_TOKEN:
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    # Зафиксирован строгий текстовый формат parse_mode во избежание сбоев импорта
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
 
     @dp.message()
@@ -206,7 +198,6 @@ async def run_combined():
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     logger.info("🤖 Экосистема Джинни успешно запущена на Timeweb.")
     
-    # Автоматический перехват порта, выделенного платформой Timeweb
     port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
