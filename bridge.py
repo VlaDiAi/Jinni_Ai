@@ -7,7 +7,7 @@ import base64
 import re
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
@@ -26,15 +26,15 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в панели Timeweb!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# Исправлен адрес ИИ-шлюза на OpenAI-совместимый эндпоинт Timeweb Cloud AI
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
 
+# КРИТИЧЕСКИЙ CORS MIDDLEWARE ДЛЯ TELEGRAM MINI APP (УНИЧТОЖЕНИЕ БЛОКИРОВОК)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,13 +49,18 @@ class CommandRequest(BaseModel):
     file_name: Optional[str] = None
 
 def find_frontend_path():
+    # На Timeweb App Platform код репозитория монтируется в директорию /app/
     possible_paths = [
-        "index.html", "./index.html", "opt/ai_orchestrator/index.html",
-        "/opt/ai_orchestrator/index.html", os.path.join(os.path.dirname(__file__), "index.html")
+        "index.html", 
+        "./index.html", 
+        "/app/index.html",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     ]
     for path in possible_paths:
         if os.path.exists(path):
+            logger.info(f"🎯 Фронтенд index.html успешно найден по пути: {path}")
             return path
+    logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: Файл index.html физически отсутствует в контейнере!")
     return None
 
 def load_local_knowledge() -> str:
@@ -83,7 +88,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
     
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, headers=headers, timeout=10)
             sha = resp.json().get("sha") if resp.status_code == 200 else None
         except Exception as e:
             logger.error(f"Ошибка получения SHA: {e}")
@@ -97,7 +102,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             payload["sha"] = sha
             
         try:
-            put_resp = await client.put(url, headers=headers, json=payload)
+            put_resp = await client.put(url, headers=headers, json=payload, timeout=15)
             # ВНЕДРЕН ВАЛИДНЫЙ МАССИВ УСПЕШНЫХ КОДОВ ОТВЕТА (ФИКС КРИТИЧЕСКОГО БАГА)
             if put_resp.status_code in:
                 return "✅ [ИИ-Программист] Код успешно внедрен и запушен на GitHub!"
@@ -106,12 +111,24 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
         except Exception as e:
             return f"❌ Исключение при пуше в GitHub: {e}"
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def serve_index():
     path = find_frontend_path()
     if path:
         return FileResponse(path, media_type="text/html")
-    return JSONResponse(status_code=404, content={"error": "Frontend index.html not found"})
+    # Диагностический экран вместо слепого белого экрана при отсутствии фронтенда
+    return """
+    <html>
+        <head><meta charset="UTF-8"><title>Диагностика MONOLIT-MOS</title></head>
+        <body style="background-color: #0d0e15; color: #ff0055; font-family: sans-serif; text-align: center; padding-top: 100px;">
+            <h1 style="font-size: 28px;">🚨 Бэкенд запущен, но index.html не найден в контейнере /app/!</h1>
+            <p style="color: #ffffff; font-size: 16px;">Сэр, убедитесь, что на сайте GitHub файл <b>index.html</b> лежит в самом корне репозитория <b>VladiAi/Jinni_Ai</b> и назван маленькими буквами.</p>
+            <div style="margin-top: 30px; padding: 15px; background: #141622; display: inline-block; border-radius: 5px; color: #00ffcc;">
+                Статус ядра Джинни: ONLINE | Порт: Инициализирован
+            </div>
+        </body>
+    </html>
+    """
 
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
@@ -153,7 +170,7 @@ async def process_command(request: CommandRequest):
             if response.status_code == 200:
                 ai_reply = response.json()['choices'][0]['message']['content']
                 
-                # ЖЕСТКАЯ СВЕРХНАДЕЖНАЯ REGEX-ЛОГИКА ПАРСИНГА ПАТЧЕЙ (ЗАМЕНА РАЗБИЕНИЯ SPLIT)
+                # НАДЕЖНАЯ REGEX-ЛОГИКА ПАРСИНГА ПАТЧЕЙ (ЗАМЕНА СБОЙНОГО SPLIT)
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
                 match = re.search(pattern, ai_reply, re.DOTALL)
                 
@@ -189,7 +206,7 @@ async def run_combined():
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     logger.info("🤖 Экосистема Джинни успешно запущена на Timeweb.")
     
-    # Автоматический перехват порта, выделенного платформой Timeweb (по дефолту 7778)
+    # Автоматический перехват порта, выделенного платформой Timeweb
     port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
