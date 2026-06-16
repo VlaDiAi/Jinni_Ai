@@ -27,7 +27,8 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
+# Сетевой мост переведен на корневой OpenAI-интерфейс Timeweb Cloud
+TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
@@ -160,6 +161,7 @@ async def process_command(request: CommandRequest):
         "Ты общаешься СТРОГО с Владом (сэром). АКТУАЛЬНАЯ БАЗА РАСЦЕНОК КОМПАНИИ:\n" + prices_context
     )
     
+    # Формируем стандартные заголовки Bearer для ИИ-балансировщика Timeweb
     headers = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "model": "gpt-5-nano",
@@ -167,7 +169,8 @@ async def process_command(request: CommandRequest):
         "temperature": 0.2
     }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # ВНЕДРЕН КРИТИЧЕСКИЙ ФЛАГ follow_redirects=True ДЛЯ ПРОБИВА ОШИБКИ 308
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             if response.status_code == 200:
                 ai_reply = response.json()['choices']['message']['content']
@@ -184,7 +187,6 @@ async def process_command(request: CommandRequest):
                         ai_reply += f"\n\n⚠️ Ошибка: {git_err}"
                 return {"reply": ai_reply}
             
-            # ФИКС: Удалены круглые скобки и await у response.text, убран вызов свойства как функции
             err_body = response.text
             return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
     except Exception as e:
