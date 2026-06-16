@@ -5,6 +5,8 @@ import sys
 import httpx
 import base64
 import re
+import json
+import urllib.request
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -14,6 +16,10 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
+
+# Тотальное уничтожение любых прокси-аномалий среды выполнения для изоляции от петель Nginx
+for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]:
+    os.environ.pop(var, None)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
@@ -30,10 +36,7 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или ИИ-ключ не найдены в панели Timeweb!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-
-# ОБХОД СЕТЕВОЙ ПЕТЛИ: Заворачиваем запрос в глобальный прокси-туннель corsproxy.io
-# Это скроет от локального Nginx домен timeweb.ai и заставит выпустить запрос наружу
-TIMEWEB_GATEWAY_URL = "https://corsproxy.io"
+TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
 MODEL_NAME = "openai/gpt-5-nano"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -152,6 +155,19 @@ HTML_CODE = """
 </html>
 """
 
+def sync_urllib_post(url: str, headers: dict, data_bytes: bytes) -> tuple:
+    """Низкоуровневый синхронный POST-запрос, полностью изолированный от сетевых библиотек и прокси ОС"""
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    # Принудительно отключаем системные прокси-обработчики на уровне инстанса urllib
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=45) as response:
+            return response.status, response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+    except Exception as e:
+        return 500, str(e)
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     return HTML_CODE
@@ -176,7 +192,8 @@ async def process_command(request: CommandRequest):
     
     headers = {
         "Authorization": f"Bearer {TIMEWEB_AI_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" # Защита от блокировок по User-Agent
     }
     
     payload = {
@@ -189,29 +206,30 @@ async def process_command(request: CommandRequest):
     }
     
     try:
-        # Отправляем запрос через corsproxy.io. Nginx видит домен corsproxy.io, пропускает его наружу,
-        # а прокси-сервер пересылает чистый POST-запрос на api.timeweb.ai
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
+        data_bytes = json.dumps(payload).encode("utf-8")
+        
+        # Выполняем низкоуровневый запрос в изолированном системном потоке thread-pool
+        status_code, response_text = await asyncio.to_thread(
+            sync_urllib_post, TIMEWEB_GATEWAY_URL, headers, data_bytes
+        )
+        
+        if status_code == 200:
+            data = json.loads(response_text)
+            ai_reply = data["choices"][0]["message"]["content"]
             
-            if response.status_code == 200:
-                data = response.json()
-                ai_reply = data["choices"][0]["message"]["content"]
-                
-                pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
-                match = re.search(pattern, ai_reply, re.DOTALL)
-                if match:
-                    try:
-                        file_info = match.group(1).strip()
-                        file_code = match.group(2).strip()
-                        github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info}")
-                        ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
-                    except Exception as git_err:
-                        ai_reply += f"\n\n⚠️ Ошибка коммита: {git_err}"
-                return {"reply": ai_reply}
-            
-            err_body = response.text
-            return {"reply": f"Сбой ИИ-шлюза (Статус: {response.status_code}). Текст: {err_body[:150]}"}
+            pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
+            match = re.search(pattern, ai_reply, re.DOTALL)
+            if match:
+                try:
+                    file_info = match.group(1).strip()
+                    file_code = match.group(2).strip()
+                    github_status = await push_code_to_github(file_info, file_code, f"ИИ-Апгрейд: {file_info}")
+                    ai_reply += f"\n\n🤖 [Интегратор]: {github_status}"
+                except Exception as git_err:
+                    ai_reply += f"\n\n⚠️ Ошибка коммита: {git_err}"
+            return {"reply": ai_reply}
+        
+        return {"reply": f"Сбой ИИ-шлюза (Код: {status_code}). Ответ сервера: {response_text[:120]}"}
             
     except Exception as e:
         return {"reply": f"Системный сбой соединения: {str(e)}"}
