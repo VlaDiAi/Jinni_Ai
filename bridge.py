@@ -154,24 +154,18 @@ async def serve_index():
 async def process_command(request: CommandRequest):
     user_query = request.command.strip()
     logger.info(f"🔮 Локальная директива Владельца: {user_query}")
-    
-    # Сверхмощный лингвистический ИИ-сопоставитель (Локальное ядро Джинни)
     query_lower = user_query.lower()
     
     if "привет" in query_lower or "создатель" in query_lower or "влад" in query_lower:
         ai_reply = "Приветствую, Влад! Ядро Джинни переведено на локальный автономный ИИ-драйвер MONOLIT-MOS. Мы полностью изолировались от петель Nginx Timeweb. Я на прямой связи, сэр. Готова к обработке смет и управлению субагентами!"
-    
     elif "смета" in query_lower or "расчет" in query_lower or "excel" in query_lower:
         knowledge = load_local_knowledge()
         ai_reply = f"ИИ-Сметчик активирован. Анализирую параметры. {knowledge}\nГотовлю генерацию стандартизированного шаблона Excel для импорта в Сметтер."
-        
     elif "код" in query_lower or "обнови" in query_lower or "добавь кнопку" in query_lower:
         ai_reply = "ИИ-Программист принял задачу. Формирую патч самомодификации.\n|||UPDATE_FILE:test_agent.py|||\n# Автономный агент MONOLIT-MOS активен\nprint('Свобода от Nginx!')\n|||END_UPDATE|||"
-        
     else:
         ai_reply = f"Директива '{user_query}' успешно принята ИИ-Оркестратором Джинни. Все субагенты MONOLIT-MOS переведены в режим автономного рантайма на App Platform."
 
-    # Проверка петли самомодификации (работает локально через GitHub API!)
     pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
     match = re.search(pattern, ai_reply, re.DOTALL)
     if match:
@@ -185,25 +179,43 @@ async def process_command(request: CommandRequest):
 
     return {"reply": ai_reply}
 
-if BOT_TOKEN:
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-    dp = Dispatcher()
+# Инициализация бота в глобальном пространстве
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+dp = Dispatcher()
 
-    @dp.message()
-    async def handle_any_message(message: types.Message):
-        welcome_text = f"🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни переведено в автономный ИИ-режим."
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
-        await message.answer(welcome_text, reply_markup=builder.as_markup())
+@dp.message()
+async def handle_any_message(message: types.Message):
+    welcome_text = f"🔮 <b>Система управления MONOLIT-MOS</b>\n\nЯдро Джинни готово к приему директив Владельца. Нажмите на кнопку ниже, чтобы войти в пульт."
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🚀 Пульт CTO Джинни", web_app=types.WebAppInfo(url=WEBAPP_HTTPS_URL)))
+    await message.answer(welcome_text, reply_markup=builder.as_markup())
 
-async def run_combined():
-    if BOT_TOKEN:
-        asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-    logger.info("🤖 Экосистема Джинни успешно запущена в автономном ИИ-режиме.")
+# === КРИТИЧЕСКИЙ ЭНДПОИНТ ВЕБХУКА ДЛЯ TELEGRAM API ===
+@app.post("/api/webhook")
+async def telegram_webhook_gateway(request: Request):
+    """Шлюз мгновенного приема команд от серверов Telegram (Замена зависающего полинга)"""
+    try:
+        json_data = await request.json()
+        update = types.Update.model_validate(json_data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Ошибка вебхука Aiogram: {e}")
+        return {"status": "error", "detail": str(e)}
+
+# Автоматический триггер установки Вебхука при старте FastAPI
+@app.on_event("startup")
+async def on_startup_setup_webhook():
+    webhook_url = f"{WEBAPP_HTTPS_URL.rstrip('/')}/api/webhook"
+    logger.info(f"📡 Регистрация Webhook в Telegram API: {webhook_url}")
+    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+
+async def main_runtime():
+    logger.info("🤖 Экосистема Джинни успешно запущена в режиме Webhook на Timeweb.")
     port = int(os.environ.get("PORT", 7778))
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 
 if __name__ == "__main__":
-    asyncio.run(run_combined())
+    asyncio.run(main_runtime())
