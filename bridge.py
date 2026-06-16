@@ -34,32 +34,38 @@ class CommandRequest(BaseModel):
 
 def load_smetter_catalog() -> list:
     """
-    Субагент-Сметчик: Автоматически сканирует корень приложения /app/ на наличие 
-    вашего выгруженного из Сметтера Excel-файла с ценами и кэширует его в ОЗУ.
+    Субагент-Сметчик: Сканирует ИСКЛЮЧИТЕЛЬНО папку jinni_knowledge в корне репозитория,
+    находит там выгруженный из Сметтера Excel-файл расценок и кэширует его в ОЗУ.
     """
     catalog_items = []
-    # На Timeweb App Platform корень репозитория монтируется в папку /app
-    target_dir = "./" if os.path.exists("requirements.txt") else "/app/"
+    # На Timeweb App Platform корень проекта находится в /app/
+    base_dir = "./" if os.path.exists("requirements.txt") else "/app/"
+    target_dir = os.path.join(base_dir, "jinni_knowledge")
     
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir, exist_ok=True)
+        logger.info(f"📁 Создана пустая папка знаний: {target_dir}")
+        return catalog_items
+        
     try:
         for f_name in os.listdir(target_dir):
-            # Ищем файл расценок (исключая временные файлы выгрузки смет)
+            # Парсим файлы прайса, отсекая временные файлы выгрузки готовых смет
             if (f_name.endswith(".xlsx") or f_name.endswith(".xls")) and "estimate_output" not in f_name:
                 file_path = os.path.join(target_dir, f_name)
-                logger.info(f"📚 Найдена база расценок Сметтера: {f_name}. Начинаю импорт в ОЗУ...")
+                logger.info(f"📚 База расценок Сметтера обнаружена в папке jinni_knowledge: {f_name}. Импорт...")
                 
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 ws = wb.active
                 
-                # Сканируем строки со 2 по 1000 (пропуская шапку таблицы Сметтера)
+                # Сканируем строки таблицы Сметтера (пропуская шапку)
                 for row in ws.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
                     if not row or not row[0] or "раздел" in str(row[0]).lower():
                         continue
                         
                     name = str(row[0]).strip()
-                    unit = str(row[1]).strip() if row[1] else "м2"
+                    unit = str(row[1]).strip() if len(row) > 1 and row[1] else "м2"
                     
-                    # Интеллектуальный перехват цен работы и материала из колонок Сметтера
+                    # Захват цен работы и материала из колонок выгрузки Сметтера
                     price_work = float(row[2]) if len(row) > 2 and isinstance(row[2], (int, float)) else 0.0
                     price_mat = float(row[3]) if len(row) > 3 and isinstance(row[3], (int, float)) else 0.0
                     
@@ -70,10 +76,10 @@ def load_smetter_catalog() -> list:
                         "price_mat": price_mat
                     })
         if catalog_items:
-            logger.info(f"✅ База расценок успешно зафиксирована: {len(catalog_items)} позиций Сметтера в ОЗУ.")
+            logger.info(f"✅ База расценок успешно зафиксирована из jinni_knowledge: {len(catalog_items)} позиций.")
         return catalog_items
     except Exception as e:
-        logger.error(f"⚠️ Ошибка авто-чтения файла расценок Excel: {e}")
+        logger.error(f"⚠️ Ошибка авто-чтения папки расценок jinni_knowledge: {e}")
         return catalog_items
 
 def parse_single_excel_bytes(file_bytes: bytes) -> dict:
@@ -96,6 +102,7 @@ def parse_single_excel_bytes(file_bytes: bytes) -> dict:
     except Exception as e:
         logger.error(f"Ошибка парсинга байтов Excel: {e}")
         return metrics
+
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru">
