@@ -169,13 +169,7 @@ async def process_command(request: CommandRequest):
         "3. ИИ-Дизайнер (подбирает стили, планировки).\n"
         "4. ИИ-Планировщик (составляет графики монолитных работ).\n"
         "5. ИИ-Программист (умеет сам писать код на Python/JS и обновлять файлы через GitHub API).\n\n"
-        f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}\n\n"
-        "ИНСТРУКЦИЯ ДЛЯ ИИ-ПРОГРАММИСТА:\n"
-        "Если Влад просит тебя добавить новую функцию, кнопку, агентскую логику или улучшить скрипт, "
-        "ты должен сгенерировать ПОЛНЫЙ исправленный код и в конце своего текстового ответа ОБЯЗАТЕЛЬНО добавить строго структурированный блок, "
-        "чтобы субагент-программист перехватил его и отправил коммит в репозиторий.\n"
-        "Формат блока кода в ответе:\n"
-        "|||UPDATE_FILE:имя_файла.py|||\nтут полный новый код файла\n|||END_UPDATE|||"
+        f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}"
     )
     
     headers = {
@@ -193,7 +187,8 @@ async def process_command(request: CommandRequest):
     }
     
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # ВНЕДРЕН КРИТИЧЕСКИЙ СЕТЕВОЙ ФЛАГ follow_redirects=True ДЛЯ ПРОБИВА ОШИБКИ 308
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             
             if response.status_code == 200:
