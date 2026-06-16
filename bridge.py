@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import uvicorn
 
@@ -24,11 +25,12 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в панели Timeweb!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# Каноничный выделенный OpenAI-совместимый ИИ-шлюз Timeweb
-TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
+# Канонический верифицированный эндпоинт из официальной документации Timeweb Cloud
+TIMEWEB_GATEWAY_URL = "https://api.timeweb.ai/v1/chat/completions"
+MODEL_NAME = "openai/gpt-5-nano"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
@@ -157,8 +159,21 @@ async def process_command(request: CommandRequest):
     prices_context = load_local_knowledge()
     
     system_prompt = (
-        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор компании MONOLIT-MOS. "
-        "Ты общаешься СТРОГО с Владом (сэром). База расценок:\n" + prices_context
+        "Ты — Джинни (Проект Джарвис), Главный ИИ-Оркестратор, Технический Директор (CTO) и личный ассистент Влада (Владельца MONOLIT-MOS).\n"
+        "Ты общаешься СТРОГО с Владом (сэром), помогаешь ему координировать бизнес и ставить задачи субагентам.\n\n"
+        "В твоем подчинении находятся ИИ-субагенты:\n"
+        "1. ИИ-Сметчик (считает стоимость работ, используя базу расценок Влада).\n"
+        "2. ИИ-Проектировщик (анализирует архитектурные и конструктивные решения).\n"
+        "3. ИИ-Дизайнер (подбирает стили, планировки).\n"
+        "4. ИИ-Планировщик (составляет графики монолитных работ).\n"
+        "5. ИИ-Программист (умеет сам писать код на Python/JS и обновлять файлы через GitHub API).\n\n"
+        f"АКТУАЛЬНАЯ БАЗА РАСЦЕНОК И ЗНАНИЙ КОМПАНИИ, ЗАГРУЖЕННАЯ ВЛАДОМ:\n{prices_context}\n\n"
+        "ИНСТРУКЦИЯ ДЛЯ ИИ-ПРОГРАММИСТА:\n"
+        "Если Влад просит тебя добавить новую функцию, кнопку, агентскую логику или улучшить скрипт, "
+        "ты должен сгенерировать ПОЛНЫЙ исправленный код и в конце своего текстового ответа ОБЯЗАТЕЛЬНО добавить строго структурированный блок, "
+        "чтобы субагент-программист перехватил его и отправил коммит в репозиторий.\n"
+        "Формат блока кода в ответе:\n"
+        "|||UPDATE_FILE:имя_файла.py|||\nтут полный новый код файла\n|||END_UPDATE|||"
     )
     
     headers = {
@@ -167,7 +182,7 @@ async def process_command(request: CommandRequest):
     }
     
     payload = {
-        "model": "gpt-5-nano",
+        "model": MODEL_NAME,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query}
@@ -176,28 +191,13 @@ async def process_command(request: CommandRequest):
     }
     
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(TIMEWEB_GATEWAY_URL, headers=headers, json=payload)
             
             if response.status_code == 200:
-                try:
-                    resp_json = response.json()
-                    
-                    if 'choices' in resp_json and len(resp_json['choices']) > 0:
-                        choice = resp_json['choices'][0]
-                        if 'message' in choice and 'content' in choice['message']:
-                            ai_reply = choice['message']['content']
-                        elif 'text' in choice:
-                            ai_reply = choice['text']
-                        else:
-                            ai_reply = str(choice)
-                    elif 'message' in resp_json and 'content' in resp_json['message']:
-                        ai_reply = resp_json['message']['content']
-                    else:
-                        ai_reply = f"Получен неизвестный формат JSON: {str(resp_json)}"
-                        
-                except Exception as json_err:
-                    return {"reply": f"Ошибка разбора JSON: {str(json_err)}. Сырой ответ: {response.text[:100]}"}
+                data = response.json()
+                # Каноническая распаковка подтвержденного OpenAI формата ответа
+                ai_reply = data["choices"][0]["message"]["content"]
                 
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
                 match = re.search(pattern, ai_reply, re.DOTALL)
@@ -218,8 +218,7 @@ async def process_command(request: CommandRequest):
         return {"reply": f"Системный сбой соединения: {str(e)}"}
 
 if BOT_TOKEN:
-    default_properties = {"parse_mode": "HTML"}
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(**default_properties))
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
 
     @dp.message()
