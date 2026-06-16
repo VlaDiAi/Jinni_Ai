@@ -24,7 +24,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в панели!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
@@ -49,12 +49,12 @@ def load_local_knowledge() -> str:
     context = ""
     try:
         if os.path.exists(KNOWLEDGE_DIR):
-            for file_name in os.listdir(KNOWLEDGE_DIR):
-                if file_name.endswith(".txt") or file_name.endswith(".xlsx") or file_name.endswith(".pdf"):
-                    context += f"\n[ПОДКЛЮЧЕН МОДУЛЬ ЗНАНИЙ СЕРВЕРА: {file_name.upper()}]\n"
+            for f_name in os.listdir(KNOWLEDGE_DIR):
+                if f_name.endswith(".txt") or f_name.endswith(".xlsx") or f_name.endswith(".pdf"):
+                    context += f"\n[ПОДКЛЮЧЕН МОДУЛЬ ЗНАНИЙ: {f_name.upper()}]\n"
         return context if context else "Локальная база расценок пуста."
     except Exception as e:
-        logger.error(f"Ошибка RAG базы расценок: {e}")
+        logger.error(f"Ошибка RAG: {e}")
         return "Ошибка загрузки базы расценок."
 
 async def push_code_to_github(file_path: str, content: str, commit_message: str):
@@ -68,7 +68,7 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
         try:
             resp = await client.get(url, headers=headers, timeout=10)
             sha = resp.json().get("sha") if resp.status_code == 200 else None
-        except Exception as e:
+        except Exception:
             sha = None
         
         payload = {"message": commit_message, "content": base64.b64encode(content.encode("utf-8")).decode("utf-8")}
@@ -77,76 +77,79 @@ async def push_code_to_github(file_path: str, content: str, commit_message: str)
             
         try:
             put_resp = await client.put(url, headers=headers, json=payload, timeout=15)
-            if put_resp.status_code in:
+            # ФИКС КРИТИЧЕСКОГО БАГА: СИНТАКСИС МАССИВА СТАТУСОВ ЗАКРЫТ КОРТЕЖЕМ (200, 201)
+            if put_resp.status_code in (200, 201):
                 return "✅ Код запушен на GitHub!"
             return f"❌ Ошибка API: {put_resp.status_code}"
         except Exception as e:
             return f"❌ Ошибка: {e}"
+# Неубиваемый неоновый веб-интерфейс, зашитый прямо в оперативную память приложения
+HTML_CODE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Джинни</title>
+    <style>
+        body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+        .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; }
+        h1 { font-size: 16px; letter-spacing: 2px; text-shadow: 0 0 10px #00f0ff; }
+        .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 200px; overflow-y: auto; text-align: left; padding: 15px; margin: 15px 0; display: flex; flex-direction: column; gap: 10px; }
+        .text-input { width: 100%; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; box-sizing: border-box; outline: none; }
+        .status { font-size: 11px; color: #88aadd; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h1>КОГНИТИВНЫЙ КОМПЛЕКС ДЖИННИ</h1>
+        <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив.</div></div>
+        <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
+        <div id="status" class="status">● Ядро онлайн | Порт: 7778</div>
+    </div>
+    <script>
+        const chatLog = document.getElementById('chatLog');
+        const textInput = document.getElementById('textInput');
+        const statusText = document.getElementById('status');
+        
+        textInput.onkeydown = async (e) => {
+            if (e.key === 'Enter') {
+                const text = textInput.value.trim();
+                if (!text) return;
+                
+                const msgDiv = document.createElement('div');
+                msgDiv.innerText = "Сэр> " + text;
+                chatLog.appendChild(msgDiv);
+                textInput.value = "";
+                statusText.innerText = "● Джинни думает...";
+                
+                try {
+                    const res = await fetch('/api/command', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: text })
+                    });
+                    const data = await res.json();
+                    const replyDiv = document.createElement('div');
+                    replyDiv.style.color = '#00f0ff';
+                    replyDiv.innerText = "Джинни> " + data.reply;
+                    chatLog.appendChild(replyDiv);
+                } catch {
+                    const errDiv = document.createElement('div');
+                    errDiv.innerText = "Джинни> Сбой шлюза.";
+                    chatLog.appendChild(errDiv);
+                }
+                statusText.innerText = "● Ядро онлайн | Порт: 7778";
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+        };
+    </script>
+</body>
+</html>
+"""
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    # На лету отдаем чистую, неубиваемую неоновую веб-панель Джинни без чтения файлов с диска
-    return """
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Джинни</title>
-        <style>
-            body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
-            .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; }
-            h1 { font-size: 16px; letter-spacing: 2px; text-shadow: 0 0 10px #00f0ff; }
-            .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 200px; overflow-y: auto; text-align: left; padding: 15px; margin: 15px 0; display: flex; flex-direction: column; gap: 10px; }
-            .text-input { width: 100%; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; box-sizing: border-box; outline: none; }
-            .status { font-size: 11px; color: #88aadd; margin-top: 10px; }
-        </style>
-    </head>
-    <body>
-        <div class="panel">
-            <h1>КОГНИТИВНЫЙ КОМПЛЕКС ДЖИННИ</h1>
-            <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив.</div></div>
-            <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
-            <div id="status" class="status">● Ядро онлайн | Порт: 7778</div>
-        </div>
-        <script>
-            const chatLog = document.getElementById('chatLog');
-            const textInput = document.getElementById('textInput');
-            const statusText = document.getElementById('status');
-            
-            textInput.onkeydown = async (e) => {
-                if (e.key === 'Enter') {
-                    const text = textInput.value.trim();
-                    if (!text) return;
-                    
-                    const msgDiv = document.createElement('div');
-                    msgDiv.innerText = "Сэр> " + text;
-                    chatLog.appendChild(msgDiv);
-                    textInput.value = "";
-                    statusText.innerText = "● Джинни думает...";
-                    
-                    try {
-                        const res = await fetch('/api/command', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ command: text })
-                        });
-                        const data = await res.json();
-                        const replyDiv = document.createElement('div');
-                        replyDiv.style.color = '#00f0ff';
-                        replyDiv.innerText = "Джинни> " + data.reply;
-                        chatLog.appendChild(replyDiv);
-                    } catch {
-                        const errDiv = document.createElement('div');
-                        errDiv.innerText = "Джинни> Сбой шлюза.";
-                        chatLog.appendChild(errDiv);
-                    }
-                    statusText.innerText = "● Ядро онлайн | Порт: 7778";
-                    chatLog.scrollTop = chatLog.scrollHeight;
-                }
-            };
-        </script>
-    </body>
-    </html>
-    """
+    return HTML_CODE
 
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
@@ -187,7 +190,9 @@ async def process_command(request: CommandRequest):
         return {"status": "success", "reply": f"Сбой: {str(e)}"}
 
 if BOT_TOKEN:
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    # Зафиксирована корректная строковая инициализация parse_mode
+    default_properties = {"parse_mode": "HTML"}
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(**default_properties))
     dp = Dispatcher()
 
     @dp.message()
