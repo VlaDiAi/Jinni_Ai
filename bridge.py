@@ -20,16 +20,18 @@ logger = logging.getLogger("JinniOrchestrator")
 
 # БЕЗОПАСНЫЙ ПЕРЕХВАТ ВСЕХ ПЕРЕМЕННЫХ С ПЛАТФОРМЫ TIMEWEB APP PLATFORM
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
 GITHUB_REPO = os.getenv("GITHUB_REPO")    
 
+# ДВОЙНАЯ СТРАХОВКА КЛЮЧА: перехват по любому из двух системных имен
+TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY")
+
 if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
-    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены в панели Timeweb!")
+    logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или ИИ-ключ не найдены в панели Timeweb!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
 # Канонический верифицированный эндпоинт из официальной документации Timeweb Cloud
-TIMEWEB_GATEWAY_URL = "https://api.timeweb.ai/v1/chat/completions"
+TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
 MODEL_NAME = "openai/gpt-5-nano"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
@@ -196,7 +198,6 @@ async def process_command(request: CommandRequest):
             
             if response.status_code == 200:
                 data = response.json()
-                # Каноническая распаковка подтвержденного OpenAI формата ответа
                 ai_reply = data["choices"][0]["message"]["content"]
                 
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
