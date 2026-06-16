@@ -27,8 +27,8 @@ if not BOT_TOKEN or not TIMEWEB_AI_TOKEN:
     logger.critical("❌ ОШИБКА: Переменные BOT_TOKEN или OPENAI_API_KEY не найдены!")
 
 WEBAPP_HTTPS_URL = "https://twc1.net" 
-# Сетевой мост переведен на официальный рабочий ИИ-шлюз Timeweb Cloud
-TIMEWEB_GATEWAY_URL = "https://timeweb.cloud"
+# Каноничный выделенный OpenAI-совместимый ИИ-шлюз Timeweb
+TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
 KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
 
 app = FastAPI(title="MONOLIT-MOS AI CTO Orchestrator")
@@ -166,7 +166,6 @@ async def process_command(request: CommandRequest):
         "Content-Type": "application/json"
     }
     
-    # Жесткая фиксация модели gpt-5-nano под требования Влада
     payload = {
         "model": "gpt-5-nano",
         "messages": [
@@ -184,8 +183,7 @@ async def process_command(request: CommandRequest):
                 try:
                     resp_json = response.json()
                     
-                    # УНИВЕРСАЛЬНЫЙ СУПЕР-ПАРСЕР: Защита от любых изменений структуры JSON провайдера
-                    if 'choices' in resp_json and isinstance(resp_json['choices'], list) and len(resp_json['choices']) > 0:
+                    if 'choices' in resp_json and len(resp_json['choices']) > 0:
                         choice = resp_json['choices'][0]
                         if 'message' in choice and 'content' in choice['message']:
                             ai_reply = choice['message']['content']
@@ -195,15 +193,12 @@ async def process_command(request: CommandRequest):
                             ai_reply = str(choice)
                     elif 'message' in resp_json and 'content' in resp_json['message']:
                         ai_reply = resp_json['message']['content']
-                    elif 'text' in resp_json:
-                        ai_reply = resp_json['text']
                     else:
-                        ai_reply = f"Получен неизвестный формат ответа: {str(resp_json)}"
+                        ai_reply = f"Получен неизвестный формат JSON: {str(resp_json)}"
                         
                 except Exception as json_err:
                     return {"reply": f"Ошибка разбора JSON: {str(json_err)}. Сырой ответ: {response.text[:100]}"}
                 
-                # Логика петли автоматической самомодификации ИИ-Программиста
                 pattern = r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)"
                 match = re.search(pattern, ai_reply, re.DOTALL)
                 if match:
@@ -216,7 +211,6 @@ async def process_command(request: CommandRequest):
                         ai_reply += f"\n\n⚠️ Ошибка коммита: {git_err}"
                 return {"reply": ai_reply}
             
-            # Если шлюз отказал, выводим сырой текст ответа для мгновенной отладки
             err_body = response.text
             return {"reply": f"Сбой ИИ-шлюза Timeweb (Статус: {response.status_code}). Текст: {err_body[:150]}"}
             
