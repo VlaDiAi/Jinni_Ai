@@ -180,10 +180,10 @@ HTML_CODE = """
 </html>
 """
 # ПЕРЕМЕННАЯ ДЛЯ ХРАНЕНИЯ СМЕТЫ ПРЯМО В ОЗУ СЕРВЕРА
+# ПЕРЕМЕННАЯ ДЛЯ ХРАНЕНИЯ СМЕТЫ ПРЯМО В ОЗУ СЕРВЕРА
 CURRENT_ESTIMATE_BYTES = None
 
 def generate_smetter_excel(calculated_items: list):
-    """Генерация Excel-сметы строго в оперативную память (BytesIO) без записи на диск контейнера"""
     global CURRENT_ESTIMATE_BYTES
     try:
         wb = openpyxl.Workbook()
@@ -215,7 +215,6 @@ def generate_smetter_excel(calculated_items: list):
             max_len = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col.column_letter].width = max(max_len + 3, 12)
             
-        # Записываем сгенерированные байты таблицы напрямую в ОЗУ буфер
         stream = BytesIO()
         wb.save(stream)
         CURRENT_ESTIMATE_BYTES = stream.getvalue()
@@ -229,17 +228,15 @@ async def serve_index(): return HTML_CODE
 
 @app.get("/api/download-estimate")
 async def download_estimate():
-    """Эндпоинт мгновенной отдачи сметного файла из оперативной памяти"""
     global CURRENT_ESTIMATE_BYTES
     if CURRENT_ESTIMATE_BYTES:
         from fastapi.responses import StreamingResponse
-        # Отдаем виртуальный файл в потоке прямо из ОЗУ
         return StreamingResponse(
             BytesIO(CURRENT_ESTIMATE_BYTES),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=estimate_batch_monolit.xlsx"}
         )
-    raise HTTPException(status_code=404, detail="Смета еще не была рассчитана.")
+    raise HTTPException(status_code=404, detail="Смета еще не рассчитана.")
 
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
@@ -269,6 +266,8 @@ async def process_command(request: CommandRequest):
                     f_name = request.file_name_list[idx]
                     header, encoded = base64_file.split(",", 1) if "," in base64_file else ("", base64_file)
                     file_bytes = base64.b64decode(encoded)
+                    
+                    # Сценарий А: Загружено ИЗОБРАЖЕНИЕ (ИИ-Зрение чертежа)
                     if "image" in header.lower() or f_name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
                         payload_v = {
                             "model": "openai/gpt-5-nano",
@@ -287,6 +286,35 @@ async def process_command(request: CommandRequest):
                                     total_perimeter += float(v_res.get("perimeter", 0.0))
                                     vision_context += f"• Из фото '{f_name}' извлечено: Пол {v_res.get('floor_area')}м2, Стены {v_res.get('wall_area')}м2.\n"
                         except Exception: pass
+                        
+                    # Сценарий Б: Загружен EXCEL -> АКТИВИРУЕМ ИИ-АНАЛИЗ ТЕКСТА ТАБЛИЦЫ ДЛЯ ИСКЛЮЧЕНИЯ НУЛЕЙ
+                    elif f_name.lower().endswith(('.xlsx', '.xls')):
+                        try:
+                            wb_in = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+                            ws_in = wb_in.active
+                            table_dump = ""
+                            # Снимаем текстовый текстовый слепок первых 50 строк таблицы для отправки в ИИ
+                            for r_arr in ws_in.iter_rows(max_row=50, max_col=6, values_only=True):
+                                if any(r_arr): table_dump += " | ".join([str(c) for c in r_arr if c is not None]) + "\n"
+                            
+                            payload_ex = {
+                                "model": "openai/gpt-5-nano",
+                                "messages": [
+                                    {"role": "system", "content": "Ты — ИИ-Сметчик. Проанализируй текстовый дамп таблицы Excel и найди суммарную площадь пола (м2), площадь стен (м2) и периметр (мп). Понимай любые сокращения и контекст (например S пола, ведомость отделки). Ответь СТРОГО в формате JSON: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра} без лишних слов."},
+                                    {"role": "user", "content": f"Вот дамп таблицы:\n{table_dump}"}
+                                ], "temperature": 0.1
+                            }
+                            async with httpx.AsyncClient(timeout=30.0) as client:
+                                r_ex = await client.post(url_ai, headers=headers_ai, json=payload_ex)
+                                if r_ex.status_code == 200:
+                                    ex_res = json.loads(re.sub(r"```json|```", "", r_ex.json()["choices"]["message"]["content"]).strip())
+                                    total_floor += float(ex_res.get("floor_area", 0.0))
+                                    total_walls += float(ex_res.get("wall_area", 0.0))
+                                    total_perimeter += float(ex_res.get("perimeter", 0.0))
+                                    vision_context += f"• Из Excel '{f_name}' извлечено через ИИ: Пол {ex_res.get('floor_area')}м2, Стены {ex_res.get('wall_area')}м2.\n"
+                        except Exception as e:
+                            logger.error(f"Ошибка ИИ-парсинга Excel: {e}")
+
                     elif f_name.lower().endswith(('.xlsx', '.xls')):
                         m = parse_single_excel_bytes(file_bytes)
                         total_floor += m["floor_area"]; total_walls += m["wall_area"]; total_perimeter += m["perimeter"]
