@@ -244,7 +244,6 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
         fill_header = openpyxl.styles.PatternFill(start_color="1A1A1A", end_color="1A1A1A", fill_type="solid")
         thin_side = openpyxl.styles.Side(border_style="thin", color="CCCCCC")
         border_data = openpyxl.styles.Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-        
         headers = ["Тип", "Наименование позиции (Работы / Материалы)", "Ед. изм.", "Количество", "Цена (руб.)", "Итого (руб.)"]
         ws.append(headers)
         for col_num, header in enumerate(headers, 1):
@@ -252,7 +251,6 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
             cell.font = font_header
             cell.fill = fill_header
             cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
-
         for item in calculated_items:
             row_data = [item["type"], item["name"], item["unit"], float(item["volume"]), float(item["price"]), float(item["volume"]) * float(item["price"])]
             ws.append(row_data)
@@ -261,7 +259,6 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
             ws.cell(row=r_idx, column=4).number_format = '#,##0.00'
             ws.cell(row=r_idx, column=5).number_format = '#,##0.00'
             ws.cell(row=r_idx, column=6).number_format = '#,##0.00'
-            
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col.column_letter].width = max(max_len + 3, 12)
@@ -270,8 +267,7 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
     except Exception: return None
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_index():
-    return HTML_CODE
+async def serve_index(): return HTML_CODE
 
 @app.get("/api/download-estimate")
 async def download_estimate():
@@ -284,84 +280,126 @@ async def download_estimate():
 async def process_command(request: CommandRequest):
     try:
         raw_query = request.command.strip()
-        logger.info(f"🔮 Парсинг мульти-агентного пакета: {raw_query}")
-        
-        # Разделяем префикс выбранной кнопки и тело запроса Влада
-        if ": " in raw_query:
-            agent_prefix, user_query = raw_query.split(": ", 1)
-        else:
-            agent_prefix, user_query = "AUTO", raw_query
-
+        logger.info(f"🔮 Запуск ИИ-Оркестрации: {raw_query}")
+        if ": " in raw_query: agent_prefix, user_query = raw_query.split(": ", 1)
+        else: agent_prefix, user_query = "AUTO", raw_query
         agent_prefix = agent_prefix.upper()
         query_lower = user_query.lower()
         smetter_catalog = load_smetter_catalog()
-        
-        # Если режим АВТО-ИИ, Джинни сама определяет департамент по ключевым словам
         if agent_prefix == "AUTO":
-            if "радар" in query_lower or "скаут" in query_lower or "чат" in query_lower: agent_prefix = "SCOUT"
-            elif "код" in query_lower or "обнови" in query_lower or "скрипт" in query_lower: agent_prefix = "CODER"
-            elif "чертеж" in query_lower or "монолит" in query_lower or "бетон" in query_lower: agent_prefix = "ENGINEER"
-            elif "график" in query_lower or "план" in query_lower: agent_prefix = "PLANNER"
-            else: agent_prefix = "SMETTER" # По умолчанию включаем Сметчик
+            if any(k in query_lower for k in ["радар", "скаут", "лид", "жк"]): agent_prefix = "SCOUT"
+            elif any(k in query_lower for k in ["код", "обнови", "скрипт", "github", "напиши"]): agent_prefix = "CODER"
+            elif any(k in query_lower for k in ["бетон", "арматур", "монолит", "чертеж"]): agent_prefix = "ENGINEER"
+            elif any(k in query_lower for k in ["график", "гпр", "план", "сроки"]): agent_prefix = "PLANNER"
+            else: agent_prefix = "SMETTER"
+        headers_ai = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
+        url_ai = "https://timeweb.ai"
 
-        # === 1. МАРШРУТИЗАЦИЯ: ДЕПАРТАМЕНТ ИИ-СМЕТЧИКА ===
         if agent_prefix == "SMETTER":
             total_floor, total_walls, total_perimeter = 0.0, 0.0, 0.0
-            if request.file_data_list:
-                for base64_file in request.file_data_list:
+            vision_context = ""
+            if request.file_data_list and request.file_name_list:
+                for idx, base64_file in enumerate(request.file_data_list):
+                    f_name = request.file_name_list[idx]
                     header, encoded = base64_file.split(",", 1) if "," in base64_file else ("", base64_file)
                     file_bytes = base64.b64decode(encoded)
-                    metrics = parse_single_excel_bytes(file_bytes)
-                    total_floor += metrics["floor_area"]
-                    total_walls += metrics["wall_area"]
-                    total_perimeter += metrics["perimeter"]
-
+                    if "image" in header.lower() or f_name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                        payload_v = {
+                            "model": "openai/gpt-5-nano",
+                            "messages": [
+                                {"role": "system", "content": "Ты — ИИ-Сметчик MONOLIT-MOS. Извлеки из фото: площадь пола (м2), площадь стен (м2), периметр пола (мп). Верни СТРОГО JSON: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра}."},
+                                {"role": "user", "content": [{"type": "text", "text": "Парси:"}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}]}
+                            ], "temperature": 0.1
+                        }
+                        try:
+                            async with httpx.AsyncClient(timeout=45.0) as client:
+                                r = await client.post(url_ai, headers=headers_ai, json=payload_v)
+                                if r.status_code == 200:
+                                    v_res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
+                                    total_floor += float(v_res.get("floor_area", 0.0))
+                                    total_walls += float(v_res.get("wall_area", 0.0))
+                                    total_perimeter += float(v_res.get("perimeter", 0.0))
+                                    vision_context += f"• Из фото '{f_name}' извлечено: Пол {v_res.get('floor_area')}м2, Стены {v_res.get('wall_area')}м2.\n"
+                        except Exception: pass
+                    elif f_name.lower().endswith(('.xlsx', '.xls')):
+                        m = parse_single_excel_bytes(file_bytes)
+                        total_floor += m["floor_area"]
+                        total_walls += m["wall_area"]
+                        total_perimeter += m["perimeter"]
+                        vision_context += f"• Из Excel '{f_name}': Пол {m['floor_area']}м2, Стены {m['wall_area']}м2.\n"
+            if total_floor == 0 and user_query:
+                payload_t = {
+                    "model": "openai/gpt-5-nano",
+                    "messages": [
+                        {"role": "system", "content": "Извлеки замеры из текста. Ответь СТРОГО JSON: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра}. Дефолт: 45.0, 110.0, 32.0."},
+                        {"role": "user", "content": user_query}
+                    ], "temperature": 0.1
+                }
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        r = await client.post(url_ai, headers=headers_ai, json=payload_t)
+                        if r.status_code == 200:
+                            t_res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
+                            total_floor = float(t_res.get("floor_area", 45.0))
+                            total_walls = float(t_res.get("wall_area", 110.0))
+                            total_perimeter = float(t_res.get("perimeter", 32.0))
+                except Exception: total_floor, total_walls, total_perimeter = 45.0, 110.0, 32.0
             if total_floor == 0: total_floor, total_walls, total_perimeter = 45.0, 110.0, 32.0
             output_estimate_rows = []
-            
             if smetter_catalog:
-                for catalog_item in smetter_catalog:
-                    item_name_lower = catalog_item["name"].lower()
-                    if "стен" in item_name_lower or "обои" in item_name_lower or "покраск" in item_name_lower or "шпатлевк" in item_name_lower: volume = total_walls
-                    elif "пол" in item_name_lower or "кварцвинил" in item_name_lower: volume = total_floor
-                    elif "плинтус" in item_name_lower or "периметр" in item_name_lower: volume = total_perimeter
-                    else: volume = total_floor
-                        
-                    if catalog_item["price_work"] > 0:
-                        output_estimate_rows.append({"type": "Работа", "name": catalog_item["name"], "unit": catalog_item["unit"], "volume": volume, "price": catalog_item["price_work"]})
-                    if catalog_item["price_mat"] > 0:
-                        output_estimate_rows.append({"type": "Материал", "name": f"{catalog_item['name']} (Материал)", "unit": catalog_item["unit"], "volume": volume * 1.05 if catalog_item["unit"] == "м2" else volume, "price": catalog_item["price_mat"]})
+                for c_item in smetter_catalog:
+                    nm_low = c_item["name"].lower()
+                    if "стен" in nm_low or "обои" in nm_low or "покраск" in nm_low or "шпатлевк" in nm_low: vol = total_walls
+                    elif "пол" in nm_low or "кварцвинил" in nm_low or "ламинат" in nm_low: vol = total_floor
+                    elif "плинтус" in nm_low or "периметр" in nm_low: vol = total_perimeter
+                    else: vol = total_floor
+                    if c_item["price_work"] > 0:
+                        output_estimate_rows.append({"type": "Работа", "name": c_item["name"], "unit": c_item["unit"], "volume": vol, "price": c_item["price_work"]})
+                    if c_item["price_mat"] > 0:
+                        output_estimate_rows.append({"type": "Материал", "name": f"{c_item['name']} (Материал)", "unit": c_item["unit"], "volume": vol * 1.05 if c_item["unit"] == "м2" else vol, "price": c_item["price_mat"]})
             else:
                 output_estimate_rows = [
-                    {"type": "Работа", "name": "Выравнивание стен (Каталог не найден в jinni_knowledge)", "unit": "м2", "volume": total_walls, "price": 1200.0},
-                    {"type": "Работа", "name": "Укладка кварцвинила (Каталог не найден в jinni_knowledge)", "unit": "м2", "volume": total_floor, "price": 850.0}
+                    {"type": "Работа", "name": "Выравнивание стен (Каталог Сметтера пуст)", "unit": "м2", "volume": total_walls, "price": 1200.0},
+                    {"type": "Работа", "name": "Укладка кварцвинила (Каталог Сметтера пуст)", "unit": "м2", "volume": total_floor, "price": 850.0}
                 ]
-
             generate_smetter_excel(output_estimate_rows)
-            catalog_status = f"Успешно сопоставлено {len(smetter_catalog)} расценок из Сметтера." if smetter_catalog else "Использован аварийный прайс-лист."
-            reply = f"Сэр, ИИ-Сметчик выполнил расчет! Объемы: Пол = {total_floor} м², Стены = {total_walls} м², Периметр = {total_perimeter} мп. {catalog_status} Сводный шаблон для импорта собран!"
+            c_status = f"Успешно подтянуто позиций из Сметтера: {len(smetter_catalog)} шт." if smetter_catalog else "Использован резервный прайс."
+            reply = f"Сэр, ИИ-Сметчик завершил интеллектуальный расчет объекта!\n\n{vision_context}\nИТОГОВЫЕ СВОДНЫЕ ОБЪЕМЫ:\n• Площадь пола: {total_floor} м²\n• Площадь стен: {total_walls} м²\n• Периметр под плинтус: {total_perimeter} мп\n\n{c_status}\nСводная Excel-таблица импорта полностью готова к выгрузке!"
             return {"reply": reply, "has_estimate": True}
 
-        # === 2. МАРШРУТИЗАЦИЯ: ДЕПАРТАМЕНТ ИИ-РАДАРА ===
-        elif agent_prefix == "SCOUT":
-            reply = "🕵️ [ИИ-РАДАР СКАУТ]: Сэр, служба scout_catcher.service на VPS WILD CHICKADEE функционирует в штатном режиме 24/7. Regex-матрица 3.0 активна. За последние часы ложных срабатываний не зафиксировано, спам-боты заблокированы, эфир по 40+ ЖК Москвы чист. Ожидаю выгрузку новых маржинальных лидов прорабов."
-            return {"reply": reply, "has_estimate": False}
-
-        # === 3. МАРШРУТИЗАЦИЯ: ДЕПАРТАМЕНТ ИИ-КОДЕРА ===
         elif agent_prefix == "CODER":
-            reply = "💻 [ИИ-ПРОГРАММИСТ ИНТЕГРАТОР]: Задача по модификации принята, Влад. Интеграция с GitHub API активна. Готовлю генерацию патча для самообновления кодовой базы. Передайте точное ТЗ на добавление новых кнопок или функций."
+            payload_c = {
+                "model": "openai/gpt-5-nano",
+                "messages": [
+                    {"role": "system", "content": "Ты — ИИ-Программист MONOLIT-MOS. Напиши код под задачу Владельца. Обязательно оберни код в блок: |||UPDATE_FILE:имя_файла.py||| код |||END_UPDATE|||"},
+                    {"role": "user", "content": user_query}
+                ], "temperature": 0.2
+            }
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                r = await client.post(url_ai, headers=headers_ai, json=payload_c)
+                reply = r.json()["choices"]["message"]["content"] if r.status_code == 200 else "Сбой шлюза кодера."
+            match = re.search(r"\|\|\|UPDATE_FILE:(.*?)\|\|\|(.*?)(\|\|\|END_UPDATE\|\|\||$)", reply, re.DOTALL)
+            if match:
+                git_status = await push_code_to_github(match.group(1).strip(), match.group(2).strip(), f"ИИ-Апгрейд: {match.group(1).strip()}")
+                reply += f"\n\n🤖 [Интегратор GitHub]: {git_status}"
             return {"reply": reply, "has_estimate": False}
 
-        # === 4. МАРШРУТИЗАЦИЯ: ДЕПАРТАМЕНТ ИИ-ИНЖЕНЕРА ПРОЕКТИРОВЩИКА ===
-        elif agent_prefix == "ENGINEER":
-            reply = "📐 [ИИ-ИНЖЕНЕР ПРОЕКТИРОВЩИК]: Монолитный конструкторский отдел на связи, сэр. Готов к расчету объемов бетона, шага армирования, толщины перекрытий и проверке несущих стен по вашему ТЗ. Прикрепите чертеж объекта."
+        else:
+            payload_a = {
+                "model": "openai/gpt-5-nano",
+                "messages": [
+                    {"role": "system", "content": f"Ты — главный ИИ-{agent_prefix} компании MONOLIT-MOS. Дай профессиональный технический ответ Владу (сэром) по его строительному вопросу."},
+                    {"role": "user", "content": user_query}
+                ], "temperature": 0.3
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(url_ai, headers=headers_ai, json=payload_a)
+                reply = r.json()["choices"]["message"]["content"] if r.status_code == 200 else "Сбой ИИ-шлюза субагента."
             return {"reply": reply, "has_estimate": False}
-
-        # === 5. МАРШРУТИЗАЦИЯ: ДЕПАРТАМЕНТ ИИ-ПЛАНИРОВЩИКА ===
-        elif agent_prefix == "PLANNER":
-            reply = "📅 [ИИ-ПЛАНИРОВЩИК СДР]: Отдел календарно-сетевого планирования активен. Готов составить график производства работ (ГПР) для монолитных и отделочных циклов компании MONOLIT-MOS, рассчитать критический путь и загрузку звеньев."
-            return {"reply": reply, "has_estimate": False}
-
     except Exception as e:
-        logger.error(f"Ошибка диспетчеризации агентов: {e}")
-        return {"reply": f"Критическая ошибка ядра Оркестратора: {str(e)}", "has_estimate": False}
+        logger.error(f"Ошибка диспетчеризации: {e}")
+        return {"reply": f"Ошибка ядра: {str(e)}", "has_estimate": False}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 7778))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
