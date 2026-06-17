@@ -15,20 +15,9 @@ import openpyxl
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("JinniSmetterVisionOrchestrator")
+logger = logging.getLogger("JinniSmetterBatchOrchestrator")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
-GITHUB_REPO = os.getenv("GITHUB_REPO")    
-# Ключ AI Gateway Timeweb для работы зрения gpt-5-nano
-TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
-
-WEBAPP_HTTPS_URL = "https://twc1.net" 
-TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
-MODEL_NAME = "openai/gpt-5-nano"
-KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
-
-app = FastAPI(title="MONOLIT-MOS Vision Smetter Orchestrator")
+app = FastAPI(title="MONOLIT-MOS Batch Smetter Orchestrator")
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,29 +33,53 @@ class CommandRequest(BaseModel):
     file_name_list: Optional[List[str]] = None
 
 def load_smetter_catalog() -> list:
+    """
+    Субагент-Сметчик: Сканирует ИСКЛЮЧИТЕЛЬНО папку jinni_knowledge в корне репозитория,
+    находит там выгруженный из Сметтера Excel-файл расценок и кэширует его в ОЗУ.
+    """
     catalog_items = []
+    # На Timeweb App Platform корень проекта находится в /app/
     base_dir = "./" if os.path.exists("requirements.txt") else "/app/"
     target_dir = os.path.join(base_dir, "jinni_knowledge")
+    
     if not os.path.exists(target_dir):
         os.makedirs(target_dir, exist_ok=True)
+        logger.info(f"📁 Создана пустая папка знаний: {target_dir}")
         return catalog_items
+        
     try:
         for f_name in os.listdir(target_dir):
+            # Парсим файлы прайса, отсекая временные файлы выгрузки готовых смет
             if (f_name.endswith(".xlsx") or f_name.endswith(".xls")) and "estimate_output" not in f_name:
                 file_path = os.path.join(target_dir, f_name)
+                logger.info(f"📚 База расценок Сметтера обнаружена в папке jinni_knowledge: {f_name}. Импорт...")
+                
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 ws = wb.active
+                
+                # Сканируем строки таблицы Сметтера (пропуская шапку)
                 for row in ws.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
-                    if not row or not row or "раздел" in str(row).lower(): continue
+                    if not row or not row[0] or "раздел" in str(row[0]).lower():
+                        continue
+                        
+                    name = str(row[0]).strip()
+                    unit = str(row[1]).strip() if len(row) > 1 and row[1] else "м2"
+                    
+                    # Захват цен работы и материала из колонок выгрузки Сметтера
+                    price_work = float(row[2]) if len(row) > 2 and isinstance(row[2], (int, float)) else 0.0
+                    price_mat = float(row[3]) if len(row) > 3 and isinstance(row[3], (int, float)) else 0.0
+                    
                     catalog_items.append({
-                        "name": str(row).strip(),
-                        "unit": str(row).strip() if len(row) > 1 and row else "м2",
-                        "price_work": float(row) if len(row) > 2 and isinstance(row, (int, float)) else 0.0,
-                        "price_mat": float(row) if len(row) > 3 and isinstance(row, (int, float)) else 0.0
+                        "name": name,
+                        "unit": unit,
+                        "price_work": price_work,
+                        "price_mat": price_mat
                     })
+        if catalog_items:
+            logger.info(f"✅ База расценок успешно зафиксирована из jinni_knowledge: {len(catalog_items)} позиций.")
         return catalog_items
     except Exception as e:
-        logger.error(f"Ошибка чтения каталога Сметтера: {e}")
+        logger.error(f"⚠️ Ошибка авто-чтения папки расценок jinni_knowledge: {e}")
         return catalog_items
 
 def parse_single_excel_bytes(file_bytes: bytes) -> dict:
@@ -86,103 +99,137 @@ def parse_single_excel_bytes(file_bytes: bytes) -> dict:
                 for cell in row:
                     if isinstance(cell, (int, float)) and cell > 0: metrics["perimeter"] = float(cell)
         return metrics
-    except Exception: return metrics
+    except Exception as e:
+        logger.error(f"Ошибка парсинга байтов Excel: {e}")
+        return metrics
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Джинни Vision AI</title>
+    <title>Джинни Оркестратор</title>
     <style>
-        body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-        .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; display: flex; flex-direction: column; align-items: center; }
-        h1 { font-size: 14px; letter-spacing: 2px; text-shadow: 0 0 10px #00f0ff; margin-top: 0; }
-        .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 180px; overflow-y: auto; text-align: left; padding: 15px; margin: 15px 0; display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box; }
-        .text-input { width: 100%; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; box-sizing: border-box; outline: none; }
+        body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
+        .panel { border: 2px solid #00f0ff; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; }
+        h1 { font-size: 14px; letter-spacing: 2px; text-shadow: 0 0 10px #00f0ff; margin-bottom: 15px; }
+        
+        /* КНОПКИ ПЕРЕКЛЮЧЕНИЯ АГЕНТОВ */
+        .agent-selector { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
+        .agent-btn { background: #001a24; border: 1px solid rgba(0, 240, 255, 0.4); color: #00bfff; padding: 8px 5px; font-size: 11px; border-radius: 5px; cursor: pointer; transition: all 0.2s; font-family: monospace; }
+        .agent-btn.active { background: #00f0ff; color: #000; box-shadow: 0 0 10px #00f0ff; border-color: #00f0ff; font-weight: bold; }
+        
+        .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 180px; overflow-y: auto; text-align: left; padding: 15px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box; }
         .input-area { display: flex; gap: 10px; align-items: center; width: 100%; }
-        .file-label { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; }
+        .text-input { flex-grow: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; box-sizing: border-box; }
+        .file-label, .voice-btn { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 14px; border-radius: 5px; cursor: pointer; font-size: 16px; user-select: none; transition: all 0.2s; }
+        .voice-btn.recording { background: #ff0055; color: #fff; border-color: #ff0055; animation: pulse 1s infinite; }
         #fileInput { display: none; }
-        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00ffcc; padding: 10px; border-radius: 5px; background: rgba(0, 50, 40, 0.4); width: 100%; box-sizing: border-box; font-size: 12px; color: #fff; }
-        .status { font-size: 11px; color: #88aadd; margin-top: 10px; }
-        .download-btn { display: none; margin-top: 15px; background: #00ffcc; color: #000; padding: 12px 25px; border-radius: 5px; font-weight: bold; text-decoration: none; box-shadow: 0 0 15px #00ffcc; }
+        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00ffcc; padding: 10px; border-radius: 5px; background: rgba(0, 50, 40, 0.4); width: 100%; box-sizing: border-box; font-size: 11px; }
+        .download-btn { display: none; margin-top: 15px; background: #00ffcc; color: #000; padding: 12px 25px; border-radius: 5px; font-weight: bold; text-decoration: none; box-shadow: 0 0 15px #00ffcc; width: 80%; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
     <div class="panel">
-        <h1>МУЛЬТИ-КОНВЕЙЕР MONOLIT-MOS</h1>
-        <div id="chatLog" class="chat-log"><div>Джинни> Прикрепите файлы ведомостей Excel ИЛИ фотографии/чертежи замеров. Я соберу сводный расчет по вашей базе Сметтера.</div></div>
-        <div id="previewBox" class="preview-box">📦 Выбрано объектов (<span id="fileCount">0</span>):<div id="fileListNames" style="color:#00ffff; margin-top:5px;"></div></div>
+        <h1>ЦЕНТРАЛЬНЫЙ ОРКЕСТРАТОР ДЖИННИ</h1>
+        
+        <!-- ИНТЕРФЕЙС ПЕРЕКЛЮЧЕНИЯ СУБАГЕНТОВ -->
+        <div class="agent-selector">
+            <button class="agent-btn active" onclick="setAgent('auto', this)">🤖 АВТО-ИИ</button>
+            <button class="agent-btn" onclick="setAgent('smetter', this)">📊 СМЕТЧИК</button>
+            <button class="agent-btn" onclick="setAgent('scout', this)">🕵️ РАДАР</button>
+            <button class="agent-btn" onclick="setAgent('engineer', this)">📐 ИНЖЕНЕР</button>
+            <button class="agent-btn" onclick="setAgent('coder', this)">💻 КОДЕР</button>
+            <button class="agent-btn" onclick="setAgent('planner', this)">📅 ПЛАНЕР</button>
+        </div>
+
+        <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Ожидаю директив голосом или текстом.</div></div>
+        <div id="previewBox" class="preview-box">📦 Файлы в очереди:<div id="fileListNames" style="color:#00ffff; margin-top:3px;"></div></div>
+        
         <div class="input-area">
             <label for="fileInput" class="file-label">📎</label>
             <input type="file" id="fileInput" multiple accept=".xlsx, .xls, image/*">
-            <input type="text" id="textInput" class="text-input" placeholder="Директива по расчету...">
+            <input type="text" id="textInput" class="text-input" placeholder="Введите команду или нажмите микрофон...">
+            <button id="voiceBtn" class="voice-btn" onclick="toggleVoice()">🎙️</button>
         </div>
-        <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_monolit.xlsx">📥 СКАЧАТЬ СВОДНУЮ СМЕТУ</a>
-        <div id="status" class="status">● Пакетный Vision-конвейер готов</div>
+        <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_monolit.xlsx">📥 СКАЧАТЬ СМЕТУ EXCEL</a>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
         const textInput = document.getElementById('textInput');
         const fileInput = document.getElementById('fileInput');
         const previewBox = document.getElementById('previewBox');
-        const fileCount = document.getElementById('fileCount');
         const fileListNames = document.getElementById('fileListNames');
         const downloadBtn = document.getElementById('downloadBtn');
-        const statusText = document.getElementById('status');
+        const voiceBtn = document.getElementById('voiceBtn');
         
         let fileBase64Array = []; let fileNameArray = [];
+        let currentAgent = 'auto';
+        let recognition = null;
+        let isRecording = false;
+
+        // Инициализация HTML5 ИИ-распознавания голоса (работает во всех смартфонах напрямую в WebView)
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechLanguage = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechLanguage();
+            recognition.lang = 'ru-RU';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            
+            recognition.onresult = (e) => {
+                const text = e.results[0][0].transcript;
+                textInput.value = text;
+                logMessage("Сэр (Голос)> " + text);
+                sendDirective(text);
+            };
+            recognition.onend = () => { stopRecordingMode(); };
+            recognition.onerror = () => { stopRecordingMode(); };
+        }
+
+        function setAgent(agentType, btn) {
+            currentAgent = agentType;
+            document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            logMessage(`Система> Принудительный селектор переведен на: ${agentType.toUpperCase()}`);
+        }
+
+        function toggleVoice() {
+            if (!recognition) { alert("Голосовой ввод не поддерживается вашим WebView"); return; }
+            if (isRecording) { recognition.stop(); } else { startRecordingMode(); }
+        }
+        function startRecordingMode() { isRecording = true; voiceBtn.classList.add('recording'); recognition.start(); }
+        function stopRecordingMode() { isRecording = false; voiceBtn.classList.remove('recording'); }
+        function logMessage(txt) { const d = document.createElement('div'); d.innerText = txt; chatLog.appendChild(d); chatLog.scrollTop = chatLog.scrollHeight; }
 
         fileInput.onchange = async () => {
             fileBase64Array = []; fileNameArray = []; fileListNames.innerHTML = "";
-            if (fileInput.files && fileInput.files.length > 0) {
-                fileCount.innerText = fileInput.files.length;
+            if (fileInput.files.length > 0) {
                 previewBox.style.display = 'block';
-                for (let i = 0; i < fileInput.files.length; i++) {
-                    const file = fileInput.files[i];
+                for (let file of fileInput.files) {
                     fileNameArray.push(file.name);
                     fileListNames.innerHTML += `• ${file.name}<br>`;
-                    const base64 = await new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => resolve(reader.result);
-                        reader.readAsDataURL(file);
-                    });
+                    const base64 = await new Promise(r => { const reader = new FileReader(); reader.onloadend = () => r(reader.result); reader.readAsDataURL(file); });
                     fileBase64Array.push(base64);
                 }
             }
         };
 
-        textInput.onkeydown = async (e) => {
-            if (e.key === 'Enter') {
-                const text = textInput.value.trim();
-                if (!text && fileBase64Array.length === 0) return;
-                const msgDiv = document.createElement('div');
-                msgDiv.innerText = `Сэр> Расчет по ${fileBase64Array.length} вложениям.`;
-                chatLog.appendChild(msgDiv);
-                textInput.value = "";
-                statusText.innerText = "● Джинни распознает фото/файлы и считает смету...";
-                downloadBtn.style.display = 'none';
-                try {
-                    const res = await fetch('/api/command', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ command: text, file_data_list: fileBase64Array, file_name_list: fileNameArray })
-                    });
-                    const data = await res.json();
-                    const replyDiv = document.createElement('div');
-                    replyDiv.style.color = '#00f0ff';
-                    replyDiv.innerText = "Джинни> " + data.reply;
-                    chatLog.appendChild(replyDiv);
-                    if(data.has_estimate) downloadBtn.style.display = 'inline-block';
-                } catch {
-                    const errDiv = document.createElement('div');
-                    errDiv.innerText = "Джинни> Ошибка Vision-сборки.";
-                    chatLog.appendChild(errDiv);
-                }
-                statusText.innerText = "● Пакетный Vision-конвейер готов";
-                chatLog.scrollTop = chatLog.scrollHeight;
-                fileBase64Array = []; fileNameArray = []; previewBox.style.display = 'none'; fileInput.value = "";
-            }
-        };
+        textInput.onkeydown = (e) => { if (e.key === 'Enter') { const t = textInput.value.trim(); if(!t && fileBase64Array.length===0)return; logMessage("Сэр> " + t); textInput.value=""; sendDirective(t); } };
+
+        async function sendDirective(text) {
+            downloadBtn.style.display = 'none';
+            try {
+                const res = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: `${currentAgent.toUpperCase()}: ${text}`, file_data_list: fileBase64Array, file_name_list: fileNameArray })
+                });
+                const data = await res.json();
+                logMessage("Джинни> " + data.reply);
+                if(data.has_estimate) downloadBtn.style.display = 'inline-block';
+            } catch { logMessage("Джинни> Ошибка маршрутизации."); }
+            fileBase64Array = []; fileNameArray = []; previewBox.style.display = 'none'; fileInput.value = "";
+        }
     </script>
 </body>
 </html>
