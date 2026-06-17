@@ -233,8 +233,7 @@ HTML_CODE = """
     </script>
 </body>
 </html>
-"""
-def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/estimate_output.xlsx"):
+"""def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/estimate_output.xlsx"):
     try:
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -281,6 +280,10 @@ async def process_command(request: CommandRequest):
     try:
         raw_query = request.command.strip()
         logger.info(f"🔮 Запуск ИИ-Оркестрации: {raw_query}")
+        
+        # ЖЕСТКИЙ ЛОКАЛЬНЫЙ ПЕРЕХВАТ ДЛЯ УНИЧТОЖЕНИЯ ОШИБКИ DEFINED
+        ACTIVE_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
+        
         if ": " in raw_query: agent_prefix, user_query = raw_query.split(": ", 1)
         else: agent_prefix, user_query = "AUTO", raw_query
         agent_prefix = agent_prefix.upper()
@@ -292,7 +295,7 @@ async def process_command(request: CommandRequest):
             elif any(k in query_lower for k in ["бетон", "арматур", "монолит", "чертеж"]): agent_prefix = "ENGINEER"
             elif any(k in query_lower for k in ["график", "гпр", "план", "сроки"]): agent_prefix = "PLANNER"
             else: agent_prefix = "SMETTER"
-        headers_ai = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
+        headers_ai = {"Authorization": f"Bearer {ACTIVE_TOKEN}", "Content-Type": "application/json"}
         url_ai = "https://timeweb.ai"
 
         if agent_prefix == "SMETTER":
@@ -327,6 +330,7 @@ async def process_command(request: CommandRequest):
                         total_walls += m["wall_area"]
                         total_perimeter += m["perimeter"]
                         vision_context += f"• Из Excel '{f_name}': Пол {m['floor_area']}м2, Стены {m['wall_area']}м2.\n"
+
             if total_floor == 0 and user_query:
                 payload_t = {
                     "model": "openai/gpt-5-nano",
