@@ -15,9 +15,20 @@ import openpyxl
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("JinniSmetterBatchOrchestrator")
+logger = logging.getLogger("JinniSmetterVisionOrchestrator")
 
-app = FastAPI(title="MONOLIT-MOS Batch Smetter Orchestrator")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  
+GITHUB_REPO = os.getenv("GITHUB_REPO")    
+# Ключ AI Gateway Timeweb для работы зрения gpt-5-nano
+TIMEWEB_AI_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
+
+WEBAPP_HTTPS_URL = "https://twc1.net" 
+TIMEWEB_GATEWAY_URL = "https://timeweb.ai"
+MODEL_NAME = "openai/gpt-5-nano"
+KNOWLEDGE_DIR = "/opt/ai_orchestrator/jinni_knowledge"
+
+app = FastAPI(title="MONOLIT-MOS Vision Smetter Orchestrator")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,53 +44,29 @@ class CommandRequest(BaseModel):
     file_name_list: Optional[List[str]] = None
 
 def load_smetter_catalog() -> list:
-    """
-    Субагент-Сметчик: Сканирует ИСКЛЮЧИТЕЛЬНО папку jinni_knowledge в корне репозитория,
-    находит там выгруженный из Сметтера Excel-файл расценок и кэширует его в ОЗУ.
-    """
     catalog_items = []
-    # На Timeweb App Platform корень проекта находится в /app/
     base_dir = "./" if os.path.exists("requirements.txt") else "/app/"
     target_dir = os.path.join(base_dir, "jinni_knowledge")
-    
     if not os.path.exists(target_dir):
         os.makedirs(target_dir, exist_ok=True)
-        logger.info(f"📁 Создана пустая папка знаний: {target_dir}")
         return catalog_items
-        
     try:
         for f_name in os.listdir(target_dir):
-            # Парсим файлы прайса, отсекая временные файлы выгрузки готовых смет
             if (f_name.endswith(".xlsx") or f_name.endswith(".xls")) and "estimate_output" not in f_name:
                 file_path = os.path.join(target_dir, f_name)
-                logger.info(f"📚 База расценок Сметтера обнаружена в папке jinni_knowledge: {f_name}. Импорт...")
-                
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 ws = wb.active
-                
-                # Сканируем строки таблицы Сметтера (пропуская шапку)
                 for row in ws.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
-                    if not row or not row[0] or "раздел" in str(row[0]).lower():
-                        continue
-                        
-                    name = str(row[0]).strip()
-                    unit = str(row[1]).strip() if len(row) > 1 and row[1] else "м2"
-                    
-                    # Захват цен работы и материала из колонок выгрузки Сметтера
-                    price_work = float(row[2]) if len(row) > 2 and isinstance(row[2], (int, float)) else 0.0
-                    price_mat = float(row[3]) if len(row) > 3 and isinstance(row[3], (int, float)) else 0.0
-                    
+                    if not row or not row or "раздел" in str(row).lower(): continue
                     catalog_items.append({
-                        "name": name,
-                        "unit": unit,
-                        "price_work": price_work,
-                        "price_mat": price_mat
+                        "name": str(row).strip(),
+                        "unit": str(row).strip() if len(row) > 1 and row else "м2",
+                        "price_work": float(row) if len(row) > 2 and isinstance(row, (int, float)) else 0.0,
+                        "price_mat": float(row) if len(row) > 3 and isinstance(row, (int, float)) else 0.0
                     })
-        if catalog_items:
-            logger.info(f"✅ База расценок успешно зафиксирована из jinni_knowledge: {len(catalog_items)} позиций.")
         return catalog_items
     except Exception as e:
-        logger.error(f"⚠️ Ошибка авто-чтения папки расценок jinni_knowledge: {e}")
+        logger.error(f"Ошибка чтения каталога Сметтера: {e}")
         return catalog_items
 
 def parse_single_excel_bytes(file_bytes: bytes) -> dict:
@@ -99,16 +86,13 @@ def parse_single_excel_bytes(file_bytes: bytes) -> dict:
                 for cell in row:
                     if isinstance(cell, (int, float)) and cell > 0: metrics["perimeter"] = float(cell)
         return metrics
-    except Exception as e:
-        logger.error(f"Ошибка парсинга байтов Excel: {e}")
-        return metrics
-
+    except Exception: return metrics
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Джинни Пакетный</title>
+    <title>Джинни Vision AI</title>
     <style>
         body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
         .panel { border: 2px solid #00f0ff; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; display: flex; flex-direction: column; align-items: center; }
@@ -125,16 +109,16 @@ HTML_CODE = """
 </head>
 <body>
     <div class="panel">
-        <h1>МУЛЬТИ-ВЕДОМОСТЬ MONOLIT-MOS</h1>
-        <div id="chatLog" class="chat-log"><div>Джинни> Выделите файлы Excel замеров (Ctrl) и нажмите Enter. Сводный расчет пойдет по вашей базе Сметтера.</div></div>
-        <div id="previewBox" class="preview-box">📦 Выбрано файлов (<span id="fileCount">0</span>):<div id="fileListNames" style="color:#00ffff; margin-top:5px;"></div></div>
+        <h1>МУЛЬТИ-КОНВЕЙЕР MONOLIT-MOS</h1>
+        <div id="chatLog" class="chat-log"><div>Джинни> Прикрепите файлы ведомостей Excel ИЛИ фотографии/чертежи замеров. Я соберу сводный расчет по вашей базе Сметтера.</div></div>
+        <div id="previewBox" class="preview-box">📦 Выбрано объектов (<span id="fileCount">0</span>):<div id="fileListNames" style="color:#00ffff; margin-top:5px;"></div></div>
         <div class="input-area">
             <label for="fileInput" class="file-label">📎</label>
-            <input type="file" id="fileInput" multiple accept=".xlsx, .xls">
+            <input type="file" id="fileInput" multiple accept=".xlsx, .xls, image/*">
             <input type="text" id="textInput" class="text-input" placeholder="Директива по расчету...">
         </div>
         <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_monolit.xlsx">📥 СКАЧАТЬ СВОДНУЮ СМЕТУ</a>
-        <div id="status" class="status">● Пакетный конвейер Сметтера готов</div>
+        <div id="status" class="status">● Пакетный Vision-конвейер готов</div>
     </div>
     <script>
         const chatLog = document.getElementById('chatLog');
@@ -172,10 +156,10 @@ HTML_CODE = """
                 const text = textInput.value.trim();
                 if (!text && fileBase64Array.length === 0) return;
                 const msgDiv = document.createElement('div');
-                msgDiv.innerText = `Сэр> Расчет по ${fileBase64Array.length} ведомостям.`;
+                msgDiv.innerText = `Сэр> Расчет по ${fileBase64Array.length} вложениям.`;
                 chatLog.appendChild(msgDiv);
                 textInput.value = "";
-                statusText.innerText = "● Пакетный ИИ-Сметчик объединяет файлы...";
+                statusText.innerText = "● Джинни распознает фото/файлы и считает смету...";
                 downloadBtn.style.display = 'none';
                 try {
                     const res = await fetch('/api/command', {
@@ -191,10 +175,10 @@ HTML_CODE = """
                     if(data.has_estimate) downloadBtn.style.display = 'inline-block';
                 } catch {
                     const errDiv = document.createElement('div');
-                    errDiv.innerText = "Джинни> Ошибка пакетной сборки.";
+                    errDiv.innerText = "Джинни> Ошибка Vision-сборки.";
                     chatLog.appendChild(errDiv);
                 }
-                statusText.innerText = "● Пакетный конвейер Сметтера готов";
+                statusText.innerText = "● Пакетный Vision-конвейер готов";
                 chatLog.scrollTop = chatLog.scrollHeight;
                 fileBase64Array = []; fileNameArray = []; previewBox.style.display = 'none'; fileInput.value = "";
             }
@@ -253,27 +237,81 @@ async def download_estimate():
 async def process_command(request: CommandRequest):
     user_query = request.command.strip().lower()
     smetter_catalog = load_smetter_catalog()
-    total_floor, total_walls, total_perimeter = 0.0, 0.0, 0.0
     
-    if request.file_data_list:
-        for base64_file in request.file_data_list:
-            try:
-                header, encoded = base64_file.split(",", 1) if "," in base64_file else ("", base64_file)
-                file_bytes = base64.b64decode(encoded)
-                metrics = parse_single_excel_bytes(file_bytes)
-                total_floor += metrics["floor_area"]
-                total_walls += metrics["wall_area"]
-                total_perimeter += metrics["perimeter"]
-            except Exception: pass
+    total_floor, total_walls, total_perimeter = 0.0, 0.0, 0.0
+    vision_log = ""
 
-    if total_floor == 0: total_floor, total_walls, total_perimeter = 45.0, 110.0, 32.0
+    # ПОТОКОВАЯ ОБРАБОТКА МУЛЬТИ-ВЛОЖЕНИЙ (ФОТО ИЛИ EXCEL)
+    if request.file_data_list and request.file_name_list:
+        for idx, base64_file in enumerate(request.file_data_list):
+            f_name = request.file_name_list[idx]
+            header, encoded = base64_file.split(",", 1) if "," in base64_file else ("", base64_file)
+            file_bytes = base64.b64decode(encoded)
+
+            # ЕСЛИ ЗАГРУЖЕНО ИЗОБРАЖЕНИЕ (ЧЕРТЕЖ, ФОТО ЗАМЕРОВ) -> АКТИВИРУЕМ VISION AI
+            if "image" in header.lower() or f_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                logger.info(f"📸 Обнаружено изображение: {f_name}. Запуск ИИ-Зрения Джинни...")
+                
+                # Каноничный OpenAI-совместимый контракт Vision API для AI Gateway Timeweb
+                headers = {"Authorization": f"Bearer {TIMEWEB_AI_TOKEN}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "openai/gpt-5-nano",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "Ты — ИИ-Сметчик MONOLIT-MOS. Твоя задача — проанализировать чертеж или фото ведомости замеров и извлечь ТРИ цифры: общую площадь пола (в м2), общую площадь стен под отделку (в м2) и периметр пола (в мп). Верни ответ СТРОГО в формате JSON без лишнего текста: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра}. Если какая-то цифра не найдена, верни для неё 0.0."
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Извлеки замеры с этого изображения:"},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+                            ]
+                        }
+                    ],
+                    "temperature": 0.1
+                }
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post("https://timeweb.ai", headers=headers, json=payload)
+                        if resp.status_code == 200:
+                            ai_res = resp.json()["choices"][0]["message"]["content"]
+                            # Вычищаем маркдаун-теги, если модель их вернула
+                            clean_json = re.sub(r"```json|```", "", ai_res).strip()
+                            data_vision = json.loads(clean_json)
+                            
+                            total_floor += float(data_vision.get("floor_area", 0.0))
+                            total_walls += float(data_vision.get("wall_area", 0.0))
+                            total_perimeter += float(data_vision.get("perimeter", 0.0))
+                            vision_log += f"• Из фото '{f_name}' извлечено: Пол {data_vision.get('floor_area')}м2, Стены {data_vision.get('wall_area')}м2.\n"
+                except Exception as e:
+                    logger.error(f"Ошибка Vision AI на шлюзе: {e}")
+                    vision_log += f"• Ошибка ИИ-Зрения для '{f_name}'.\n"
+
+            # ЕСЛИ ЗАГРУЖЕН КЛАССИЧЕСКИЙ EXCEL
+            elif f_name.lower().endswith(('.xlsx', '.xls')):
+                try:
+                    metrics = parse_single_excel_bytes(file_bytes)
+                    total_floor += metrics["floor_area"]
+                    total_walls += metrics["wall_area"]
+                    total_perimeter += metrics["perimeter"]
+                    vision_log += f"• Из Excel '{f_name}' извлечено: Пол {metrics['floor_area']}м2, Стены {metrics['wall_area']}м2.\n"
+                except Exception as e:
+                    logger.error(f"Ошибка Excel: {e}")
+
+    # Защитный холостой запуск, если на входе пусто
+    if total_floor == 0: 
+        total_floor, total_walls, total_perimeter = 45.0, 110.0, 32.0
+        vision_log = "• [Тестовый запуск] Использованы дефолтные объемы.\n"
+
     output_estimate_rows = []
     
+    # ЛОГИКА ИИ-КАЛЬКУЛЯТОРА: Перемножаем распознанные или извлеченные объемы на позиции из Сметтера
     if smetter_catalog:
         for catalog_item in smetter_catalog:
             item_name_lower = catalog_item["name"].lower()
             if "стен" in item_name_lower or "обои" in item_name_lower or "покраск" in item_name_lower or "шпатлевк" in item_name_lower: volume = total_walls
-            elif "пол" in item_name_lower or "кварцвинил" in item_name_lower: volume = total_floor
+            elif "пол" in item_name_lower or "кварцвинил" in item_name_lower or "ламинат" in item_name_lower: volume = total_floor
             elif "плинтус" in item_name_lower or "периметр" in item_name_lower: volume = total_perimeter
             else: volume = total_floor
                 
@@ -288,8 +326,9 @@ async def process_command(request: CommandRequest):
         ]
 
     generate_smetter_excel(output_estimate_rows)
-    catalog_status = f"Успешно подтянуто {len(smetter_catalog)} расценок Сметтера из вашего загруженного прайса." if smetter_catalog else "Каталог цен не обнаружен в корне репозитория."
-    ai_reply = f"Сэр, пакетный расчет выполнен! Объединено {len(request.file_name_list or [])} ведомостей. Итоговые объемы: Пол = {total_floor} м², Стены = {total_walls} м², Периметр = {total_perimeter} мп. {catalog_status} Сводный шаблон собран!"
+    
+    catalog_status = f"Успешно сопоставлено позиций из Сметтера: {len(smetter_catalog)} шт." if smetter_catalog else "Каталог цен в jinni_knowledge не обнаружен."
+    ai_reply = f"Сэр, Vision-анализ пакета документов завершен!\n\n{vision_log}\nИТОГОВЫЙ СВОДНЫЙ ОБЪЕМ:\n• Суммарный пол: {total_floor} м²\n• Суммарные стены: {total_walls} м²\n• Суммарный периметр: {total_perimeter} мп\n\n{catalog_status}\nСводная таблица импорта для Сметтера полностью пересобрана. Ссылку для скачивания выдаю!"
     return {"reply": ai_reply, "has_estimate": True}
 
 if __name__ == "__main__":
