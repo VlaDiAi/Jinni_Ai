@@ -9,7 +9,7 @@ from typing import Optional, List
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("JinniOrchestrator")
 
-app = FastAPI(title="MONOLIT-MOS Jarvis Engine")
+app = FastAPI(title="MONOLIT-MOS Jarvis")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class CommandRequest(BaseModel):
@@ -62,7 +62,7 @@ HTML_CODE = """
         <button class="agent-btn" onclick="setAgent('coder', this)">💻 КОДЕР</button>
         <button class="agent-btn" onclick="setAgent('planner', this)">📅 ПЛАНЕР</button>
     </div>
-    <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен. Загрузите замеры или напишите ТЗ.</div></div>
+    <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Введите директиву или прикрепите замеры.</div></div>
     <div id="previewBox" class="preview-box">📦 Файлы в очереди:<div id="fileListNames" style="color:#00ffff;"></div></div>
     <div class="input-area">
         <label for="fileInput" class="file-label">📎</label>
@@ -117,78 +117,68 @@ async def process_command(request: CommandRequest):
     global CURRENT_ESTIMATE_BYTES
     try:
         raw_query = request.command.strip()
-        ACTIVE_TOKEN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
-        agent_prefix, user_query = raw_query.split(": ", 1) if ": " in raw_query else ("AUTO", raw_query)
-        agent_prefix = agent_prefix.upper()
-        smetter_catalog = load_smetter_catalog()
+        TKN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
+        prefix, query = raw_query.split(": ", 1) if ": " in raw_query else ("AUTO", raw_query)
+        prefix, q_low = prefix.upper(), query.lower()
+        catalog = load_smetter_catalog()
         
-        if agent_prefix == "AUTO":
-            if any(k in user_query.lower() for k in ["радар", "скаут", "лид"]): agent_prefix = "SCOUT"
-            elif any(k in user_query.lower() for k in ["код", "обнови", "github"]): agent_prefix = "CODER"
-            else: agent_prefix = "SMETTER"
+        if prefix == "AUTO":
+            if any(k in q_low for k in ["радар", "скаут", "лид"]): prefix = "SCOUT"
+            elif any(k in q_low for k in ["код", "обнови", "github"]): prefix = "CODER"
+            else: prefix = "SMETTER"
 
-        headers_ai = {"Authorization": f"Bearer {ACTIVE_TOKEN}", "Content-Type": "application/json"}
+        headers_ai = {"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}
         url_ai = "https://timeweb.ai"
 
-        if agent_prefix == "SCOUT":
-            return {"reply": "🕵️ [ИИ-РАДАР СКАУТ]: Служба scout_catcher.service на VPS работает стабильно. Матрица 3.0 Regex активна.", "has_estimate": False}
-        elif agent_prefix == "CODER":
-            return {"reply": "💻 [ИИ-КОДЕР]: Контур интеграции с GitHub API активен. Готов принять ТЗ на генерацию кода.", "has_estimate": False}
-        elif agent_prefix == "ENGINEER":
-            return {"reply": "📐 [ИИ-ИНЖЕНЕР]: Конструкторский отдел на связи. Готов к расчету объемов бетона.", "has_estimate": False}
-        elif agent_prefix == "PLANNER":
-            return {"reply": "📅 [ИИ-ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР производства монолитных работ.", "has_estimate": False}
+        if prefix == "SCOUT": return {"reply": "🕵️ [РАДАР]: Служба scout_catcher на VPS активна. Эфир Москвы чист.", "has_estimate": False}
+        elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
+        elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
+        elif prefix == "CODER": return {"reply": "💻 [ИИ-КОДЕР]: Выделенный ИИ-Инженер на базе gpt-5-nano готов к авто-модификации файлов репозитория. Введите ТЗ.", "has_estimate": False}
 
-        if agent_prefix == "SMETTER":
-            t_floor, t_walls, t_perimeter = 45.0, 110.0, 32.0
-            v_ctx = "• Использованы эталонные замеры помещения (Резервный контур).\\n"
-            
+        if prefix == "SMETTER":
+            t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
+            v_ctx = ""
             if request.file_data_list and request.file_name_list:
                 for idx, b64 in enumerate(request.file_data_list):
-                    f_name = request.file_name_list[idx]
+                    f_nm = request.file_name_list[idx]
                     encoded = b64.split(",", 1) if "," in b64 else b64
-                    is_img = "image" in b64.lower() or f_name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
-                    prompt = "Извлеки из чертежа/фото: площадь пола (м2), площадь стен (м2), периметр (мп)." if is_img else "Проанализируй текстовый дамп таблицы за замерщика и найди суммарную площадь пола (м2), площадь стен (м2) и периметр под плинтус (мп). Понимай любые сокращения."
-                    content_payload = [{"type": "text", "text": prompt}]
-                    if is_img: content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}})
+                    is_img = "image" in b64.lower() or f_nm.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
+                    prmt = "Извлеки из фото замеры. Верни JSON: {\\\"floor_area\\\": цифра, \\\"wall_area\\\": цифра, \\\"perimeter\\\": цифра}." if is_img else "Проанализируй дамп Excel и найди суммарную площадь пола (м2), площадь стен (м2) и периметр (мп). Понимай сокращения. Верни СТРОГО JSON: {\\\"floor_area\\\": цифра, \\\"wall_area\\\": цифра, \\\"perimeter\\\": цифра}."
+                    c_payload = [{"type": "text", "text": prmt}]
+                    if is_img: c_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}})
                     else:
                         wb_in = openpyxl.load_workbook(BytesIO(base64.b64decode(encoded)), data_only=True)
                         dump = "\\n".join([" | ".join([str(c) for c in r if c is not None]) for r in wb_in.active.iter_rows(max_row=50, max_col=6, values_only=True) if any(r)])
-                        content_payload.append({"type": "text", "text": f"Дамп таблицы:\\n{dump}"})
-
-                    payload = {"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "Верни ответ СТРОГО в формате JSON: {\\\"floor_area\\\": цифра, \\\"wall_area\\\": цифра, \\\"perimeter\\\": цифра}. Без лишних слов."}, {"role": "user", "content": content_payload}], "temperature": 0.1}
+                        c_payload.append({"type": "text", "text": f"Дамп таблицы:\\n{dump}"})
                     try:
-                        async with httpx.AsyncClient(timeout=45.0) as client:
-                            r = await client.post(url_ai, headers=headers_ai, json=payload)
+                        async with httpx.AsyncClient(timeout=45.0) as cl:
+                            r = await cl.post(url_ai, headers=headers_ai, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "Ответ СТРОГО JSON без слов."}, {"role": "user", "content": c_payload}], "temperature": 0.1})
                             if r.status_code == 200:
                                 res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
-                                t_floor += float(res.get("floor_area", 0.0))
-                                t_walls += float(res.get("wall_area", 0.0))
-                                t_perimeter += float(res.get("perimeter", 0.0))
-                                v_ctx += f"• Из файла '{f_name}' извлечено ИИ: Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\\n"
+                                t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
+                                v_ctx += f"• Из файла '{f_nm}' извлечено ИИ: Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\\n"
                     except Exception: pass
 
-            nums = [float(s) for s in re.findall(r'\\b\\d+\\b', user_query)]
-            if t_floor == 45.0 and len(nums) >= 2:
-                t_floor = nums
-                t_walls = nums
-                t_perimeter = nums if len(nums) > 2 else t_floor * 0.7
-                v_ctx = f"• Параметры успешно извлечены из текста: Пол={t_floor}м2, Стены={t_walls}м2.\\n"
-
+            nums = [float(s) for s in re.findall(r'\\b\\d+\\b', q_low)]
+            if t_fl == 0 and len(nums) >= 2:
+                t_fl, t_wl = nums, nums
+                t_pr = nums if len(nums) > 2 else t_fl * 0.7
+                v_ctx = f"• Извлечено из текста: Пол={t_fl}м2, Стены={t_wl}м2.\\n"
+            if t_fl == 0: t_fl, t_wl, t_pr = 45.0, 110.0, 32.0; v_ctx = "• Использована резервная база замеров.\\n"
+            
             rows = []
             total_sum = 0.0
-            if smetter_catalog:
-                for c in smetter_catalog:
+            if catalog:
+                for c in catalog:
                     n = c["name"].lower()
-                    koef = 1.07 if c["price_mat"] > 0 else 1.0
-                    vol = t_walls if any(x in n for x in ["стен", "обои", "покраск", "шпатлевк"]) else (t_perimeter if any(x in n for x in ["плинтус", "периметр"]) else t_floor)
-                    vol_final = vol * koef
-                    price_final = c["price_work"] if c["price_work"] > 0 else c["price_mat"]
-                    total_sum += (vol_final * price_final)
-                    rows.append({"type": "Работа" if c["price_work"] > 0 else "Материал", "name": str(c["name"]), "unit": str(c["unit"]), "volume": float(vol_final), "price": float(price_final)})
+                    kf = 1.07 if c["price_mat"] > 0 else 1.0
+                    vol = t_wl if any(x in n for x in ["стен", "обои", "покраск"]) else (t_pr if any(x in n for x in ["плинтус", "периметр"]) else t_fl)
+                    v_fn, pr_fn = vol * kf, c["price_work"] if c["price_work"] > 0 else c["price_mat"]
+                    total_sum += (v_fn * pr_fn)
+                    rows.append({"type": "Работа" if c["price_work"] > 0 else "Материал", "name": str(c["name"]), "unit": str(c["unit"]), "volume": float(v_fn), "price": float(pr_fn)})
             else:
-                rows = [{"type": "Работа", "name": "Выравнивание стен под отделку", "unit": "м2", "volume": t_walls, "price": 1200.0}, {"type": "Работа", "name": "Укладка замкового кварцвинила под ключ", "unit": "м2", "volume": t_floor, "price": 850.0}]
-                total_sum = (t_walls * 1200.0) + (t_floor * 850.0)
+                rows = [{"type": "Работа", "name": "Выравнивание стен под отделку", "unit": "м2", "volume": t_wl, "price": 1200.0}, {"type": "Работа", "name": "Укладка замкового кварцвинила под ключ", "unit": "м2", "volume": t_fl, "price": 850.0}]
+                total_sum = (t_wl * 1200.0) + (t_fl * 850.0)
             
             wb_out = openpyxl.Workbook()
             ws_out = wb_out.active
@@ -206,13 +196,10 @@ async def process_command(request: CommandRequest):
             CURRENT_ESTIMATE_BYTES = stream.getvalue()
             
             try:
-                BOT_TOKEN = "8951288596:AAHzhBLQjuTnq06qHCxtogvS5kQ7GsUE8x0"
-                files = {'document': ('estimate_monolit.xlsx', CURRENT_ESTIMATE_BYTES, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
-                httpx.post(f"https://telegram.org{BOT_TOKEN}/sendDocument", data={'chat_id': '453880464', 'caption': f"🔮 Смета MONOLIT-MOS сгенерирована!\\nИтоговая сумма: {total_sum:,.2f} руб."}, files=files, timeout=5)
+                B_TKN = "8951288596:AAHzhBLQjuTnq06qHCxtogvS5kQ7GsUE8x0"
+                httpx.post(f"https://telegram.org{B_TKN}/sendDocument", data={'chat_id': '453880464', 'caption': f"🔮 Смета MONOLIT-MOS!\\nСумма: {total_sum:,.2f} руб."}, files={'document': ('estimate_monolit.xlsx', CURRENT_ESTIMATE_BYTES, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}, timeout=5)
             except Exception: pass
-
-            return {"reply": f"Сэр, ИИ-Сметчик выполнил сквозной расчет!\\n\\n{v_ctx}\\nИТОГОВЫЕ ОБЪЕМЫ: Пол = {t_floor} м², Стены = {t_walls} м², Периметр = {t_perimeter} мп.\\n\\n💰 ИТОГОВАЯ СТОИМОСТЬ ОБЪЕКТА: {total_sum:,.2f} руб. (Запас 7% учтен).\\n\\n🚀 [Джарвис]: Смета отправлена документом прямо вам в чат Telegram! Также её можно скачать по кнопке ниже.", "has_estimate": True}
-
+            return {"reply": f"Сэр, ИИ-Сметчик выполнил сквозной расчет!\\n\\n{v_ctx}\\nИТОГ: Пол = {t_fl} м², Стены = {t_wl} м², Периметр = {t_pr} мп.\\n\\n💰 ИТОГОВАЯ СУММА: {total_sum:,.2f} руб. (Запас материалов 7% учтен).\\n\\n🚀 [Джарвис]: Смета отправлена документом прямо вам в чат Telegram! Также её можно скачать по кнопке ниже.", "has_estimate": True}
     except Exception as e: return {"reply": f"Ошибка ядра: {str(e)}", "has_estimate": False}
 
 if __name__ == "__main__":
