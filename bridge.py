@@ -179,7 +179,12 @@ HTML_CODE = """
 </body>
 </html>
 """
-def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/estimate_output.xlsx"):
+# ПЕРЕМЕННАЯ ДЛЯ ХРАНЕНИЯ СМЕТЫ ПРЯМО В ОЗУ СЕРВЕРА
+CURRENT_ESTIMATE_BYTES = None
+
+def generate_smetter_excel(calculated_items: list):
+    """Генерация Excel-сметы строго в оперативную память (BytesIO) без записи на диск контейнера"""
+    global CURRENT_ESTIMATE_BYTES
     try:
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -189,12 +194,14 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
         fill_header = openpyxl.styles.PatternFill(start_color="1A1A1A", end_color="1A1A1A", fill_type="solid")
         thin_side = openpyxl.styles.Side(border_style="thin", color="CCCCCC")
         border_data = openpyxl.styles.Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
         headers = ["Тип", "Наименование позиции (Работы / Материалы)", "Ед. изм.", "Количество", "Цена (руб.)", "Итого (руб.)"]
         ws.append(headers)
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num)
             cell.font = font_header; cell.fill = fill_header
             cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+            
         for item in calculated_items:
             row_data = [item["type"], item["name"], item["unit"], float(item["volume"]), float(item["price"]), float(item["volume"]) * float(item["price"])]
             ws.append(row_data)
@@ -203,22 +210,36 @@ def generate_smetter_excel(calculated_items: list, output_path: str = "/tmp/esti
             ws.cell(row=r_idx, column=4).number_format = '#,##0.00'
             ws.cell(row=r_idx, column=5).number_format = '#,##0.00'
             ws.cell(row=r_idx, column=6).number_format = '#,##0.00'
+            
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col.column_letter].width = max(max_len + 3, 12)
-        wb.save(output_path)
-        return output_path
-    except Exception: return None
+            
+        # Записываем сгенерированные байты таблицы напрямую в ОЗУ буфер
+        stream = BytesIO()
+        wb.save(stream)
+        CURRENT_ESTIMATE_BYTES = stream.getvalue()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка openpyxl: {e}")
+        return False
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(): return HTML_CODE
 
 @app.get("/api/download-estimate")
 async def download_estimate():
-    path = "/tmp/estimate_output.xlsx"
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="estimate_batch_monolit.xlsx")
-    raise HTTPException(status_code=404, detail="Смета не найдена.")
+    """Эндпоинт мгновенной отдачи сметного файла из оперативной памяти"""
+    global CURRENT_ESTIMATE_BYTES
+    if CURRENT_ESTIMATE_BYTES:
+        from fastapi.responses import StreamingResponse
+        # Отдаем виртуальный файл в потоке прямо из ОЗУ
+        return StreamingResponse(
+            BytesIO(CURRENT_ESTIMATE_BYTES),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=estimate_batch_monolit.xlsx"}
+        )
+    raise HTTPException(status_code=404, detail="Смета еще не была рассчитана.")
 
 @app.post("/api/command")
 async def process_command(request: CommandRequest):
@@ -270,6 +291,7 @@ async def process_command(request: CommandRequest):
                         m = parse_single_excel_bytes(file_bytes)
                         total_floor += m["floor_area"]; total_walls += m["wall_area"]; total_perimeter += m["perimeter"]
                         vision_context += f"• Из Excel '{f_name}': Пол {m['floor_area']}м2, Стены {m['wall_area']}м2.\n"
+
             if total_floor == 0 and user_query:
                 payload_t = {
                     "model": "openai/gpt-5-nano",
