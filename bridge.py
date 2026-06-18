@@ -32,9 +32,9 @@ def load_smetter_catalog() -> list:
                 for r in wb.active.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
                     if not r or any(x in str(r).lower() for x in ["раздел", "none"]) if r else True: continue
                     catalog_items.append({
-                        "name": str(r).strip() if r else "", "unit": str(r).strip() if len(r) > 1 and r else "м2",
-                        "price_work": float(r) if len(r) > 2 and isinstance(r, (int, float)) else 0.0,
-                        "price_mat": float(r) if len(r) > 3 and isinstance(r, (int, float)) else 0.0
+                        "name": str(r[0]).strip() if r[0] else "", "unit": str(r[1]).strip() if len(r) > 1 and r[1] else "м2",
+                        "price_work": float(r[2]) if len(r) > 2 and isinstance(r[2], (int, float)) else 0.0,
+                        "price_mat": float(r[3]) if len(r) > 3 and isinstance(r[3], (int, float)) else 0.0
                     })
         return catalog_items
     except Exception as e: logger.error(f"Catalog error: {e}"); return catalog_items
@@ -55,7 +55,7 @@ async def process_command(request: CommandRequest):
     global CURRENT_ESTIMATE_BYTES
     try:
         raw_query = request.command.strip()
-        TKN = os.getenv("OPENAI_API_KEY") or os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY")
+        TKN = os.getenv("TIMEWEB_AI_API_KEY") or os.getenv("TIMEWEB_AI_GATEWAY_KEY") or os.getenv("OPENAI_API_KEY")
         prefix, query = raw_query.split(": ", 1) if ": " in raw_query else ("AUTO", raw_query)
         prefix, q_low = prefix.upper(), query.lower()
         catalog = load_smetter_catalog()
@@ -71,14 +71,12 @@ async def process_command(request: CommandRequest):
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
         
-        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Через официальный OpenAI SDK
+        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Через официальный OpenAI SDK и домен api.timeweb.ai/v1/
         elif prefix == "CODER":
             if not TKN: return {"reply": "❌ Сбой кодера: В системе не задан токен TIMEWEB_AI_API_KEY.", "has_estimate": False}
             try:
                 from openai import AsyncOpenAI
-                base_url = "https://timeweb.cloud" if "cloud" in TKN or len(TKN) > 40 else "https://timeweb.ai"
-                ai_client = AsyncOpenAI(api_key=TKN, base_url=base_url)
-                
+                ai_client = AsyncOpenAI(api_key=TKN, base_url="https://timeweb.ai")
                 sys_prmt = "Ты — ИИ-Программист комплекса MONOLIT-MOS. Сгенерируй ИСПРАВЛЕННЫЙ код для bridge.py. Убери openpyxl строки 'ws_out.views.sheetView.showGridLines'. Верни ответ СТРОГО в маркдаун-блоке с кодом Python (```python ... ```)."
                 
                 response = await ai_client.chat.completions.create(
@@ -86,19 +84,18 @@ async def process_command(request: CommandRequest):
                     messages=[{"role": "system", "content": sys_prmt}, {"role": "user", "content": f"ТЗ: {query}"}],
                     temperature=0.2
                 )
-                ai_content = response.choices.message.content
+                ai_content = response.choices[0].message.content
                 cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
                 code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
-                return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код сгенерирован успешно через официальный SDK!\n\n```python\n{code_clean}\n```", "has_estimate": False}
-            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка SDK в контейнере: {str(e)}", "has_estimate": False}
+                return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован через официальный SDK:\n\n```python\n{code_clean}\n```", "has_estimate": False}
+            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка шлюза SDK (api.timeweb.ai): {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
             v_ctx = ""
             if request.file_data_list and request.file_name_list:
                 from openai import AsyncOpenAI
-                base_url = "https://timeweb.cloud" if "cloud" in TKN or len(TKN) > 40 else "https://timeweb.ai"
-                ai_client = AsyncOpenAI(api_key=TKN, base_url=base_url)
+                ai_client = AsyncOpenAI(api_key=TKN, base_url="https://timeweb.ai")
                 
                 for idx, b64 in enumerate(request.file_data_list):
                     f_nm = request.file_name_list[idx]
@@ -119,15 +116,15 @@ async def process_command(request: CommandRequest):
                                 messages=[{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}],
                                 temperature=0.1
                             )
-                            res = json.loads(re.sub(r"```json|```", "", r.choices.message.content).strip())
+                            res = json.loads(re.sub(r"```json|```", "", r.choices[0].message.content).strip())
                             t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
                             v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
                         except Exception as e: logger.error(f"File AI error: {e}")
             
             nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
             if t_fl == 0 and len(nums) >= 2:
-                t_fl, t_wl = nums, nums
-                t_pr = nums if len(nums) > 2 else t_fl * 0.7
+                t_fl, t_wl = nums[0], nums[1]
+                t_pr = nums[2] if len(nums) > 2 else t_fl * 0.7
                 v_ctx = f"• Из текста: Пол={t_fl}м2, Стены={t_wl}м2.\n"
             if t_fl == 0: t_fl, t_wl, t_pr = 45.0, 110.0, 32.0; v_ctx = "• Использован резерв замеров.\n"
             
