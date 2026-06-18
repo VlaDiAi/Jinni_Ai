@@ -70,7 +70,6 @@ async def process_command(request: CommandRequest):
         if prefix == "SCOUT": return {"reply": "🕵️ [РАДАР]: Служба scout_catcher на VPS активна. Эфир Москвы чист.", "has_estimate": False}
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
-        
         elif prefix == "CODER":
             code_patch = "import os, sys, math\n# Автономный патч\ndef calc(f, w): return math.ceil((w*1200 + f*850 + (f*0.25*6500)) / 100) * 100"
             return {"reply": f"🤖 [ИИ-Кодер (Автономный режим)]: Код патча сформирован:\n```python\n{code_patch}\n```", "has_estimate": False}
@@ -79,7 +78,6 @@ async def process_command(request: CommandRequest):
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
             v_ctx = ""
             
-            # БРОНЕБОЙНЫЙ RAG-ОБРАБОТЧИК ФАЙЛОВ ПОД GPT-5-NANO
             if request.file_data_list and request.file_name_list:
                 headers_gate = {"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}
                 for idx, b64 in enumerate(request.file_data_list):
@@ -87,43 +85,51 @@ async def process_command(request: CommandRequest):
                     meta, base64_data = b64.split(",", 1) if "," in b64 else ("", b64)
                     is_img = "image" in meta.lower() or f_nm.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
                     
-                    if is_img:
+                    if is_img and TKN:
+                        # Картинки/чертежи отдаем gpt-5-nano
                         c_payload = [{"type": "text", "text": "Найди замеры. Напиши строго в формате: FLOOR=число, WALL=число, PERIMETER=число"}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_data}"}}]
-                    else:
                         try:
-                            wb_in = openpyxl.load_workbook(BytesIO(base64.b64decode(base64_data)), data_only=True)
-                            dump = "\n".join([" | ".join([str(c) for c in r if c is not None]) for r in wb_in.active.iter_rows(max_row=40, max_col=5, values_only=True) if any(r)])
-                        except Exception: dump = "Пустой или поврежденный файл Excel"
-                        c_payload = [{"type": "text", "text": "Проанализируй дамп Excel. Найди площади пола, стен и периметр. Напиши строго в формате: FLOOR=число, WALL=число, PERIMETER=число"}, {"type": "text", "text": f"Дамп:\n{dump}"}]
-                    
-                    if TKN:
-                        try:
-                            # СТРОГО ТВОЯ МОДЕЛЬ GPT-5-NANO
                             payload_ai = {"model": "openai/gpt-5-nano", "messages": [{"role": "user", "content": c_payload}], "temperature": 0.1}
                             async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as cl:
                                 r = await cl.post("https://timeweb.cloud", headers=headers_gate, json=payload_ai)
                                 if r.status_code == 200:
                                     ai_text = r.json()["choices"]["message"]["content"]
-                                    # Парсим значения регулярками, защищаясь от ошибок json.loads
                                     f_val = re.search(r'FLOOR\s*=\s*([\d.]+)', ai_text, re.IGNORECASE)
                                     w_val = re.search(r'WALL\s*=\s*([\d.]+)', ai_text, re.IGNORECASE)
                                     p_val = re.search(r'PERIMETER\s*=\s*([\d.]+)', ai_text, re.IGNORECASE)
-                                    
                                     f_num = float(f_val.group(1)) if f_val else 0.0
                                     w_num = float(w_val.group(1)) if w_val else 0.0
                                     p_num = float(p_val.group(1)) if p_val else 0.0
-                                    
                                     t_fl += f_num; t_wl += w_num; t_pr += p_num
-                                    v_ctx += f"• Из файла '{f_nm}': Пол={f_num}м², Стены={w_num}м²\n"
-                        except Exception as e: logger.error(f"RAG Error for {f_nm}: {e}")
+                                    v_ctx += f"• Из фото '{f_nm}': Пол={f_num}м², Стены={w_num}м²\n"
+                        except Exception as e: logger.error(f"Image RAG Error: {e}")
+                    else:
+                        # ЖЕЛЕЗНЫЙ АВТОНОМНЫЙ ПАРСИНГ EXCEL НА PYTHON (Без ИИ)
+                        try:
+                            f_num, w_num, p_num = 0.0, 0.0, 0.0
+                            wb_in = openpyxl.load_workbook(BytesIO(base64.b64decode(base64_data)), data_only=True)
+                            for sheet in wb_in.worksheets:
+                                for row in sheet.iter_rows(values_only=True):
+                                    row_str = " ".join([str(cell).lower() for cell in row if cell is not None])
+                                    # Ищем любые упоминания полов/стен/периметров и выдергиваем стоящие рядом цифры
+                                    digits = [float(s) for s in re.findall(r'\b\d+(?:\.\d+)?\b', row_str)]
+                                    if digits:
+                                        if any(x in row_str for x in ["пол", "floor", "площадь по"]): f_num = max(f_num, digits[0])
+                                        if any(x in row_str for x in ["стен", "wall", "площадь ст"]): w_num = max(w_num, digits[0])
+                                        if any(x in row_str for x in ["периметр", "perimeter", "пмп"]): p_num = max(p_num, digits[0])
+                            
+                            if f_num > 0 or w_num > 0:
+                                t_fl += f_num; t_wl += w_num; t_pr += (p_num if p_num > 0 else f_num * 0.7)
+                                v_ctx += f"• Из Excel '{f_nm}': Пол={f_num}м², Стены={w_num}м²\n"
+                        except Exception as e: logger.error(f"Excel Direct RAG Error: {e}")
             
-            # Откат на парсинг текста пульта, если файлы не дали цифр
             if t_fl == 0:
-                nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
-                if len(nums) >= 2:
-                    t_fl = nums[0]
-                    t_wl = nums[1]
-                    t_pr = nums[2] if len(nums) > 2 else t_fl * 0.7
+                # Извлечение из текста пульта
+                txt_nums = [float(s) for s in re.findall(r'\b\d+(?:\.\d+)?\b', q_low)]
+                if len(txt_nums) >= 2:
+                    t_fl = txt_nums[0]
+                    t_wl = txt_nums[1]
+                    t_pr = txt_nums[2] if len(txt_nums) > 2 else t_fl * 0.7
                     v_ctx = f"• Извлечено из текста: Пол={t_fl}м², Стены={t_wl}м².\n"
             
             if t_fl == 0: 
@@ -133,7 +139,6 @@ async def process_command(request: CommandRequest):
             rows = []
             total_sum = 0.0
             
-            # Монолитный расчет бетона (Толщина плиты 250мм)
             concrete_vol = t_fl * 0.25
             concrete_cost = concrete_vol * 6500.0
             rows.append({"type": "Материал", "name": "Бетон товарный B25 (М350) П4 F200 W6", "unit": "м3", "volume": float(concrete_vol), "price": 6500.0})
@@ -153,7 +158,6 @@ async def process_command(request: CommandRequest):
                 rows.append({"type": "Работа", "name": "Укладка замкового кварцвинила", "unit": "м2", "volume": t_fl, "price": 850.0})
                 total_sum += (t_wl * 1200.0) + (t_fl * 850.0)
             
-            # Макрос ценообразования (Округление до сотен вверх)
             import math
             total_sum = math.ceil(total_sum / 100.0) * 100
             margin_val = total_sum * 0.25
