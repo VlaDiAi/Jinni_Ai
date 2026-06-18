@@ -86,17 +86,21 @@ async def process_command(request: CommandRequest):
                 }
                 
                 async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                    # Стучимся строго на подтвержденный шлюз Timeweb AI
                     r = await client.post("https://timeweb.cloud", headers=headers_gate, json=payload)
                     
+                    # ПЕРЕХВАТ ОШИБКИ: Читаем сырой текст ответа, если это не JSON
+                    raw_text = r.text
+                    
                     if r.status_code == 200:
-                        res_json = r.json()
+                        res_json = json.loads(raw_text)
                         ai_content = res_json["choices"][0]["message"]["content"]
                         cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
                         code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
-                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован через HTTPX:\n\n```python\n{code_clean}\n```", "has_estimate": False}
+                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован:\n\n```python\n{code_clean}\n```", "has_estimate": False}
                     
-                    return {"reply": f"❌ Сбой ИИ-шлюза: Сервер вернул статус {r.status_code}. Проверь токен.", "has_estimate": False}
+                    # Если вернулся не 200 статус, выводим сырой ответ шлюза на экран Владу
+                    clean_html = re.sub('<[^<]+?>', '', raw_text).strip()[:200]
+                    return {"reply": f"❌ Сбой ИИ-шлюза (Статус {r.status_code}). Ответ сервера: {clean_html}", "has_estimate": False}
             except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка обработки ответа шлюза: {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
@@ -121,7 +125,7 @@ async def process_command(request: CommandRequest):
                             async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as cl:
                                 r = await cl.post("https://timeweb.cloud", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
                                 if r.status_code == 200:
-                                    res_json = r.json()
+                                    res_json = json.loads(r.text)
                                     res = json.loads(re.sub(r"```json|```", "", res_json["choices"][0]["message"]["content"]).strip())
                                     t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
                                     v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
@@ -153,7 +157,7 @@ async def process_command(request: CommandRequest):
             wb_out = openpyxl.Workbook()
             ws_out = wb_out.active
             ws_out.title = "Импорт Сметтер"
-            ws_out.append(["Тип", "Наименование позиции (Работы / Материалы)", "Ед. изм.", "Количество", "Цена (руб.)", "Итого (руб.)"])
+            ws_out.append(["Тип", "Наименование позиции (Работы / Materials)", "Ед. изм.", "Количество", "Цена (руб.)", "Итого (руб.)"])
             for r in rows: ws_out.append([str(r["type"]), str(r["name"]), str(r["unit"]), float(r["volume"]), float(r["price"]), float(r["volume"] * r["price"])])
             thin = Side(border_style="thin", color="CCCCCC")
             for row in ws_out.iter_rows(min_row=2, max_row=ws_out.max_row, min_col=1, max_col=6):
