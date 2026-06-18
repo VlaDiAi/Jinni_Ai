@@ -71,32 +71,45 @@ async def process_command(request: CommandRequest):
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
         
-        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Через официальный OpenAI SDK и домен api.timeweb.ai/v1/
+        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Прямой HTTP POST запрос без ограничений библиотек SDK
         elif prefix == "CODER":
             if not TKN: return {"reply": "❌ Сбой кодера: В системе не задан токен TIMEWEB_AI_API_KEY.", "has_estimate": False}
             try:
-                from openai import AsyncOpenAI
-                ai_client = AsyncOpenAI(api_key=TKN, base_url="https://timeweb.ai")
                 sys_prmt = "Ты — ИИ-Программист комплекса MONOLIT-MOS. Сгенерируй ИСПРАВЛЕННЫЙ код для bridge.py. Убери openpyxl строки 'ws_out.views.sheetView.showGridLines'. Верни ответ СТРОГО в маркдаун-блоке с кодом Python (```python ... ```)."
                 
-                response = await ai_client.chat.completions.create(
-                    model="openai/gpt-5-nano",
-                    messages=[{"role": "system", "content": sys_prmt}, {"role": "user", "content": f"ТЗ: {query}"}],
-                    temperature=0.2
-                )
-                ai_content = response.choices[0].message.content
-                cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
-                code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
-                return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован через официальный SDK:\n\n```python\n{code_clean}\n```", "has_estimate": False}
-            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка шлюза SDK (api.timeweb.ai): {str(e)}", "has_estimate": False}
+                # ТЕХНИЧЕСКИЙ СТАНДАРТ: Пробуем прямой корневой шлюз без лишних путей
+                headers_gate = {"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "openai/gpt-5-nano",
+                    "messages": [
+                        {"role": "system", "content": sys_prmt},
+                        {"role": "user", "content": f"ТЗ: {query}"}
+                    ],
+                    "temperature": 0.2
+                }
+                
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                    # Пробуем отправить запрос на подтвержденный API-адрес
+                    r = await client.post("https://timeweb.ai", headers=headers_gate, json=payload)
+                    
+                    # Если домен api.timeweb.ai закрыт прокси-сервером, делаем мгновенный откат на резервный шлюз
+                    if r.status_code != 200:
+                        r = await client.post("https://timeweb.cloud", headers=headers_gate, json=payload)
+                        
+                    if r.status_code == 200:
+                        ai_content = r.json()["choices"]["message"]["content"]
+                        cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
+                        code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
+                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован напрямую через HTTPX:\n\n```python\n{code_clean}\n```", "has_estimate": False}
+                    
+                    return {"reply": f"❌ Сбой ИИ-шлюза: Nginx вернул статус {r.status_code}. Проверь валидность ключа в переменных окружения Timeweb.", "has_estimate": False}
+            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка сети при пробое шлюза: {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
             v_ctx = ""
             if request.file_data_list and request.file_name_list:
-                from openai import AsyncOpenAI
-                ai_client = AsyncOpenAI(api_key=TKN, base_url="https://timeweb.ai")
-                
+                headers_gate = {"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}
                 for idx, b64 in enumerate(request.file_data_list):
                     f_nm = request.file_name_list[idx]
                     meta, base64_data = b64.split(",", 1) if "," in b64 else ("", b64)
@@ -111,14 +124,14 @@ async def process_command(request: CommandRequest):
                     
                     if TKN:
                         try:
-                            r = await ai_client.chat.completions.create(
-                                model="openai/gpt-5-nano",
-                                messages=[{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}],
-                                temperature=0.1
-                            )
-                            res = json.loads(re.sub(r"```json|```", "", r.choices[0].message.content).strip())
-                            t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
-                            v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
+                            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as cl:
+                                r = await cl.post("https://timeweb.ai", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
+                                if r.status_code != 200:
+                                    r = await cl.post("https://timeweb.cloud", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
+                                if r.status_code == 200:
+                                    res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
+                                    t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
+                                    v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
                         except Exception as e: logger.error(f"File AI error: {e}")
             
             nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
