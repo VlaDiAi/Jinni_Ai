@@ -71,13 +71,10 @@ async def process_command(request: CommandRequest):
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
         
-        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Прямой HTTP POST запрос без ограничений библиотек SDK
         elif prefix == "CODER":
             if not TKN: return {"reply": "❌ Сбой кодера: В системе не задан токен TIMEWEB_AI_API_KEY.", "has_estimate": False}
             try:
                 sys_prmt = "Ты — ИИ-Программист комплекса MONOLIT-MOS. Сгенерируй ИСПРАВЛЕННЫЙ код для bridge.py. Убери openpyxl строки 'ws_out.views.sheetView.showGridLines'. Верни ответ СТРОГО в маркдаун-блоке с кодом Python (```python ... ```)."
-                
-                # ТЕХНИЧЕСКИЙ СТАНДАРТ: Пробуем прямой корневой шлюз без лишних путей
                 headers_gate = {"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}
                 payload = {
                     "model": "openai/gpt-5-nano",
@@ -89,21 +86,18 @@ async def process_command(request: CommandRequest):
                 }
                 
                 async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                    # Пробуем отправить запрос на подтвержденный API-адрес
-                    r = await client.post("https://timeweb.ai", headers=headers_gate, json=payload)
+                    # Стучимся строго на подтвержденный шлюз Timeweb AI
+                    r = await client.post("https://timeweb.cloud", headers=headers_gate, json=payload)
                     
-                    # Если домен api.timeweb.ai закрыт прокси-сервером, делаем мгновенный откат на резервный шлюз
-                    if r.status_code != 200:
-                        r = await client.post("https://timeweb.cloud", headers=headers_gate, json=payload)
-                        
                     if r.status_code == 200:
-                        ai_content = r.json()["choices"]["message"]["content"]
+                        res_json = r.json()
+                        ai_content = res_json["choices"][0]["message"]["content"]
                         cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
                         code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
-                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован напрямую через HTTPX:\n\n```python\n{code_clean}\n```", "has_estimate": False}
+                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код на базе gpt-5-nano успешно сформирован через HTTPX:\n\n```python\n{code_clean}\n```", "has_estimate": False}
                     
-                    return {"reply": f"❌ Сбой ИИ-шлюза: Nginx вернул статус {r.status_code}. Проверь валидность ключа в переменных окружения Timeweb.", "has_estimate": False}
-            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка сети при пробое шлюза: {str(e)}", "has_estimate": False}
+                    return {"reply": f"❌ Сбой ИИ-шлюза: Сервер вернул статус {r.status_code}. Проверь токен.", "has_estimate": False}
+            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка обработки ответа шлюза: {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
@@ -125,18 +119,18 @@ async def process_command(request: CommandRequest):
                     if TKN:
                         try:
                             async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as cl:
-                                r = await cl.post("https://timeweb.ai", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
-                                if r.status_code != 200:
-                                    r = await cl.post("https://timeweb.cloud", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
+                                r = await cl.post("https://timeweb.cloud", headers=headers_gate, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
                                 if r.status_code == 200:
-                                    res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
+                                    res_json = r.json()
+                                    res = json.loads(re.sub(r"```json|```", "", res_json["choices"][0]["message"]["content"]).strip())
                                     t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
                                     v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
                         except Exception as e: logger.error(f"File AI error: {e}")
             
             nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
             if t_fl == 0 and len(nums) >= 2:
-                t_fl, t_wl = nums[0], nums[1]
+                t_fl = nums[0]
+                t_wl = nums[1]
                 t_pr = nums[2] if len(nums) > 2 else t_fl * 0.7
                 v_ctx = f"• Из текста: Пол={t_fl}м2, Стены={t_wl}м2.\n"
             if t_fl == 0: t_fl, t_wl, t_pr = 45.0, 110.0, 32.0; v_ctx = "• Использован резерв замеров.\n"
