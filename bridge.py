@@ -32,9 +32,9 @@ def load_smetter_catalog() -> list:
                 for r in wb.active.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=10, values_only=True):
                     if not r or any(x in str(r).lower() for x in ["раздел", "none"]) if r else True: continue
                     catalog_items.append({
-                        "name": str(r[0]).strip() if r[0] else "", "unit": str(r[1]).strip() if len(r) > 1 and r[1] else "м2",
-                        "price_work": float(r[2]) if len(r) > 2 and isinstance(r[2], (int, float)) else 0.0,
-                        "price_mat": float(r[3]) if len(r) > 3 and isinstance(r[3], (int, float)) else 0.0
+                        "name": str(r).strip() if r else "", "unit": str(r).strip() if len(r) > 1 and r else "м2",
+                        "price_work": float(r) if len(r) > 2 and isinstance(r, (int, float)) else 0.0,
+                        "price_mat": float(r) if len(r) > 3 and isinstance(r, (int, float)) else 0.0
                     })
         return catalog_items
     except Exception as e: logger.error(f"Catalog error: {e}"); return catalog_items
@@ -70,12 +70,21 @@ async def process_command(request: CommandRequest):
         if prefix == "SCOUT": return {"reply": "🕵️ [РАДАР]: Служба scout_catcher на VPS активна. Эфир Москвы чист.", "has_estimate": False}
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
+        
+        # БЕЗОПАСНЫЙ ИИ-КОДЕР: Прямой запрос без сторонних портов
         elif prefix == "CODER":
+            if not TKN: return {"reply": "❌ Сбой кодера: В системе не задан токен TIMEWEB_AI_API_KEY.", "has_estimate": False}
             try:
-                async with httpx.AsyncClient(timeout=65.0) as client:
-                    cr = await client.post("http://127.0.0", json={"instruction": query})
-                    return {"reply": cr.json().get("reply"), "has_estimate": False} if cr.status_code == 200 else {"reply": f"⚠️ [ИИ-КОДЕР]: Ошибка {cr.status_code}", "has_estimate": False}
-            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Связь с порт 7779 потеряна: {str(e)}", "has_estimate": False}
+                sys_prmt = "Ты — ИИ-Программист комплекса MONOLIT-MOS. Сгенерируй ИСПРАВЛЕННЫЙ код для bridge.py. Убери openpyxl строки 'ws_out.views.sheetView.showGridLines'. Верни ответ СТРОГО в маркдаун-блоке с кодом Python (```python ... ```)."
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    r = await client.post("https://timeweb.ai", headers={"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": sys_prmt}, {"role": "user", "content": f"ТЗ: {query}"}], "temperature": 0.2})
+                    if r.status_code == 200:
+                        ai_content = r.json()["choices"]["message"]["content"]
+                        cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
+                        code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
+                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код сгенерирован прямо в облаке контейнера!\n\n```python\n{code_clean}\n```", "has_estimate": False}
+                    return {"reply": f"❌ Сбой ИИ-шлюза: Статус {r.status_code}", "has_estimate": False}
+            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка генерации в контейнере: {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
@@ -102,8 +111,8 @@ async def process_command(request: CommandRequest):
                         except Exception as e: logger.error(f"File AI error: {e}")
             nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
             if t_fl == 0 and len(nums) >= 2:
-                t_fl, t_wl = nums[0], nums[1]
-                t_pr = nums[2] if len(nums) > 2 else t_fl * 0.7
+                t_fl, t_wl = nums, nums
+                t_pr = nums if len(nums) > 2 else t_fl * 0.7
                 v_ctx = f"• Из текста: Пол={t_fl}м2, Стены={t_wl}м2.\n"
             if t_fl == 0: t_fl, t_wl, t_pr = 45.0, 110.0, 32.0; v_ctx = "• Использован резерв замеров.\n"
             
