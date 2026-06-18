@@ -71,44 +71,59 @@ async def process_command(request: CommandRequest):
         elif prefix == "ENGINEER": return {"reply": "📐 [ИНЖЕНЕР]: Конструкторский отдел готов к расчету бетона и монолита.", "has_estimate": False}
         elif prefix == "PLANNER": return {"reply": "📅 [ПЛАНИРОВЩИК]: Отдел планирования готов составить ГПР монолитных работ.", "has_estimate": False}
         
-        # БЕЗОПАСНЫЙ ИИ-КОДЕР: Прямой запрос без сторонних портов
+        # БРОНЕБОЙНЫЙ ИИ-КОДЕР: Через официальный OpenAI SDK
         elif prefix == "CODER":
             if not TKN: return {"reply": "❌ Сбой кодера: В системе не задан токен TIMEWEB_AI_API_KEY.", "has_estimate": False}
             try:
+                from openai import AsyncOpenAI
+                base_url = "https://timeweb.cloud" if "cloud" in TKN or len(TKN) > 40 else "https://timeweb.ai"
+                ai_client = AsyncOpenAI(api_key=TKN, base_url=base_url)
+                
                 sys_prmt = "Ты — ИИ-Программист комплекса MONOLIT-MOS. Сгенерируй ИСПРАВЛЕННЫЙ код для bridge.py. Убери openpyxl строки 'ws_out.views.sheetView.showGridLines'. Верни ответ СТРОГО в маркдаун-блоке с кодом Python (```python ... ```)."
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    r = await client.post("https://timeweb.ai", headers={"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": sys_prmt}, {"role": "user", "content": f"ТЗ: {query}"}], "temperature": 0.2})
-                    if r.status_code == 200:
-                        ai_content = r.json()["choices"]["message"]["content"]
-                        cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
-                        code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
-                        return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код сгенерирован прямо в облаке контейнера!\n\n```python\n{code_clean}\n```", "has_estimate": False}
-                    return {"reply": f"❌ Сбой ИИ-шлюза: Статус {r.status_code}", "has_estimate": False}
-            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка генерации в контейнере: {str(e)}", "has_estimate": False}
+                
+                response = await ai_client.chat.completions.create(
+                    model="openai/gpt-5-nano",
+                    messages=[{"role": "system", "content": sys_prmt}, {"role": "user", "content": f"ТЗ: {query}"}],
+                    temperature=0.2
+                )
+                ai_content = response.choices.message.content
+                cd_match = re.search(r"```python(.*?)" + "```", ai_content, re.DOTALL)
+                code_clean = cd_match.group(1).strip() if cd_match else ai_content.replace("```", "").strip()
+                return {"reply": f"🤖 [ИИ-Кодер (Песочница)]: Код сгенерирован успешно через официальный SDK!\n\n```python\n{code_clean}\n```", "has_estimate": False}
+            except Exception as e: return {"reply": f"💻 [ИИ-КОДЕР]: Ошибка SDK в контейнере: {str(e)}", "has_estimate": False}
 
         if prefix == "SMETTER":
             t_fl, t_wl, t_pr = 0.0, 0.0, 0.0
             v_ctx = ""
             if request.file_data_list and request.file_name_list:
+                from openai import AsyncOpenAI
+                base_url = "https://timeweb.cloud" if "cloud" in TKN or len(TKN) > 40 else "https://timeweb.ai"
+                ai_client = AsyncOpenAI(api_key=TKN, base_url=base_url)
+                
                 for idx, b64 in enumerate(request.file_data_list):
                     f_nm = request.file_name_list[idx]
                     meta, base64_data = b64.split(",", 1) if "," in b64 else ("", b64)
                     is_img = "image" in meta.lower() or f_nm.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
+                    
                     if is_img:
                         c_payload = [{"type": "text", "text": "Извлеки замеры. JSON: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра}"}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_data}"}}]
                     else:
                         wb_in = openpyxl.load_workbook(BytesIO(base64.b64decode(base64_data)), data_only=True)
                         dump = "\n".join([" | ".join([str(c) for c in r if c is not None]) for r in wb_in.active.iter_rows(max_row=50, max_col=6, values_only=True) if any(r)])
                         c_payload = [{"type": "text", "text": "Найди пол, стены, периметр. JSON: {\"floor_area\": цифра, \"wall_area\": цифра, \"perimeter\": цифра}"}, {"type": "text", "text": f"Дамп:\n{dump}"}]
+                    
                     if TKN:
                         try:
-                            async with httpx.AsyncClient(timeout=45.0) as cl:
-                                r = await cl.post("https://timeweb.ai", headers={"Authorization": f"Bearer {TKN}", "Content-Type": "application/json"}, json={"model": "openai/gpt-5-nano", "messages": [{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}], "temperature": 0.1})
-                                if r.status_code == 200:
-                                    res = json.loads(re.sub(r"```json|```", "", r.json()["choices"]["message"]["content"]).strip())
-                                    t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
-                                    v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
+                            r = await ai_client.chat.completions.create(
+                                model="openai/gpt-5-nano",
+                                messages=[{"role": "system", "content": "СТРОГО JSON"}, {"role": "user", "content": c_payload}],
+                                temperature=0.1
+                            )
+                            res = json.loads(re.sub(r"```json|```", "", r.choices.message.content).strip())
+                            t_fl += float(res.get("floor_area", 0.0)); t_wl += float(res.get("wall_area", 0.0)); t_pr += float(res.get("perimeter", 0.0))
+                            v_ctx += f"• Из '{f_nm}': Пол {res.get('floor_area')}м2, Стены {res.get('wall_area')}м2.\n"
                         except Exception as e: logger.error(f"File AI error: {e}")
+            
             nums = [float(s) for s in re.findall(r'\b\d+\b', q_low)]
             if t_fl == 0 and len(nums) >= 2:
                 t_fl, t_wl = nums, nums
