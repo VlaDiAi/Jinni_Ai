@@ -1,60 +1,314 @@
 <!DOCTYPE html>
-<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Джинни</title>
-<style>
-    body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
-    .panel { border: 2px solid #00f0ff; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; }
-    .agent-selector { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
-    .agent-btn { background: #001a24; border: 1px solid rgba(0, 240, 255, 0.4); color: #00bfff; padding: 8px 5px; font-size: 11px; border-radius: 5px; cursor: pointer; font-family: monospace; }
-    .agent-btn.active { background: #00f0ff; color: #000; box-shadow: 0 0 10px #00f0ff; border-color: #00f0ff; font-weight: bold; }
-    .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 180px; overflow-y: auto; text-align: left; padding: 15px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
-    .input-area { display: flex; gap: 10px; align-items: center; }
-    .text-input { flex-grow: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; }
-    .file-label { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 14px; border-radius: 5px; cursor: pointer; font-size: 16px; }
-    .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00ffcc; padding: 10px; background: rgba(0, 50, 40, 0.4); font-size: 11px; }
-    .download-btn { display: none; margin-top: 15px; background: #00ffcc; color: #000; padding: 12px 25px; border-radius: 5px; font-weight: bold; text-decoration: none; box-shadow: 0 0 15px #00ffcc; width: 100%; box-sizing: border-box; text-align: center; }
-</style></head><body><div class="panel">
-    <h1>ЦЕНТРАЛЬНЫЙ ОРКЕСТРАТОР ДЖИННИ</h1>
-    <div class="agent-selector">
-        <button class="agent-btn active" onclick="setAgent('auto', this)">🤖 АВТО-ИИ</button>
-        <button class="agent-btn" onclick="setAgent('smetter', this)">📊 СМЕТЧИК</button>
-        <button class="agent-btn" onclick="setAgent('scout', this)">🕵️ РАДАР</button>
-        <button class="agent-btn" onclick="setAgent('engineer', this)">📐 ИНЖЕНЕР</button>
-        <button class="agent-btn" onclick="setAgent('coder', this)">💻 КОДЕР</button>
-        <button class="agent-btn" onclick="setAgent('planner', this)">📅 ПЛАНЕР</button>
-    </div>
-    <div id="chatLog" class="chat-log"><div>Джинни> Комплекс MONOLIT-MOS активен, сэр. Введите директиву или прикрепите замеры.</div></div>
-    <div id="previewBox" class="preview-box">📦 Файлы в очереди:<div id="fileListNames" style="color:#00ffff;"></div></div>
-    <div class="input-area">
-        <label for="fileInput" class="file-label">📎</label>
-        <input type="file" id="fileInput" multiple accept=".xlsx, .xls, image/*" style="display:none;">
-        <input type="text" id="textInput" class="text-input" placeholder="Введите директиву (Enter)...">
-    </div>
-    <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_batch_monolit.xlsx">📥 СКАЧАТЬ СВОДНУЮ СМЕТУ EXCEL</a>
-</div>
-<script>
-    const chatLog = document.getElementById('chatLog'), textInput = document.getElementById('textInput'), fileInput = document.getElementById('fileInput'), previewBox = document.getElementById('previewBox'), fileListNames = document.getElementById('fileListNames'), downloadBtn = document.getElementById('downloadBtn');
-    let fileBase64Array = [], fileNameArray = [], currentAgent = 'auto';
-    function setAgent(t, e) { currentAgent = t; document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active')); e.classList.add('active'); logMessage(`Система> Переведено на: ${t.toUpperCase()}`); }
-    function logMessage(t) { const e = document.createElement('div'); e.innerText = t; chatLog.appendChild(e); chatLog.scrollTop = chatLog.scrollHeight; }
-    fileInput.onchange = async () => {
-        fileBase64Array = []; fileNameArray = []; fileListNames.innerHTML = "";
-        if (fileInput.files.length > 0) {
-            previewBox.style.display = 'block';
-            for (let f of fileInput.files) {
-                fileNameArray.push(f.name); fileListNames.innerHTML += `• ${f.name}<br>`;
-                const b64 = await new Promise(r => { const reader = new FileReader(); reader.onloadend = () => r(reader.result); reader.readAsDataURL(f); });
-                fileBase64Array.push(b64);
-            }
-        }
-    };
-    textInput.onkeydown = (e) => { if (e.key === 'Enter') { const t = textInput.value.trim(); if(!t && fileBase64Array.length === 0) return; logMessage("Сэр> " + t); textInput.value = ""; sendDirective(t); } };
-    async function sendDirective(text) {
-        downloadBtn.style.display = 'none';
-        try {
-            const res = await fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: `${currentAgent.toUpperCase()}: ${text}`, file_data_list: fileBase64Array, file_name_list: fileNameArray }) });
-            const data = await res.json(); logMessage("Джинни> " + data.reply);
-            if(data.has_estimate) downloadBtn.style.display = 'block';
-        } catch { logMessage("Джинни> Ошибка сети."); }
-        fileBase64Array = []; fileNameArray = []; previewBox.style.display = 'none'; fileInput.value = "";
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MONOLIT-MOS JINNI</title>
+  <style>
+    :root {
+      --bg: #050b14;
+      --panel: #0f1721;
+      --accent: #00f0ff;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --danger: #ef4444;
     }
-</script></body></html>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Courier New', monospace; }
+    body {
+      background: var(--bg); color: var(--text);
+      height: 100vh; display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    header {
+      padding: 12px 16px; background: var(--panel);
+      border-bottom: 1px solid #1e293b;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-shrink: 0;
+    }
+    .logo { color: var(--accent); font-weight: bold; letter-spacing: 2px; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block; margin-left: 8px;
+      background: #334155; box-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+    }
+    .status-dot.online { background: #10b981; }
+
+    /* Main layout */
+    main {
+      display: flex; flex: 1; overflow: hidden;
+      min-height: 0;
+    }
+
+    /* Sidebar: agents */
+    aside {
+      width: 260px; max-width: 320px;
+      background: var(--panel); border-right: 1px solid #1e293b;
+      padding: 12px; display: flex; flex-direction: column; gap: 8px;
+      flex-shrink: 0;
+    }
+    .agent-btn {
+      background: transparent; border: 1px solid #334155;
+      color: var(--muted); padding: 10px 12px; text-align: left;
+      cursor: pointer; transition: all 0.2s; border-radius: 4px;
+    }
+    .agent-btn:hover { border-color: var(--accent); color: var(--text); }
+    .agent-btn.active {
+      border-color: var(--accent); background: rgba(0,240,255,0.05);
+      color: var(--accent);
+    }
+
+    /* Chat area */
+    .chat-container {
+      flex: 1; display: flex; flex-direction: column;
+      position: relative;
+    }
+    #chat-log {
+      flex: 1; padding: 16px; overflow-y: auto;
+      line-height: 1.5; color: #cbd5e1;
+    }
+    .msg { margin-bottom: 14px; display: flex; gap: 10px; }
+    .msg.user { text-align: right; flex-direction: row-reverse; }
+    .msg.jinni { text-align: left; }
+    .msg-bubble {
+      padding: 10px 14px; border-radius: 6px; max-width: 75%;
+      word-wrap: break-word;
+    }
+    .user .msg-bubble { background: rgba(255,255,255,0.1); }
+    .jinni .msg-bubble { background: rgba(0,240,255,0.1); color: var(--accent); }
+    .code-block {
+      background: rgba(10,10,20,0.8); border: 1px solid #334155;
+      margin: 8px 0; padding: 8px; font-size: 0.9em;
+      white-space: pre-wrap; overflow-x: auto; border-radius: 4px;
+    }
+
+    /* Input area */
+    .input-area {
+      background: var(--panel); padding: 12px;
+      border-top: 1px solid #1e293b; display: flex;
+      gap: 10px; align-items: flex-start; flex-shrink: 0;
+    }
+    #text-input {
+      flex: 1; background: rgba(0,0,0,0.3); border: 1px solid #334155;
+      color: var(--text); padding: 10px; border-radius: 4px;
+      font-family: inherit; resize: none; min-height: 40px;
+    }
+    #file-input-wrapper { position: relative; }
+    #file-input {
+      position: absolute; top: 0; left: 0; opacity: 0; width: 100%; height: 100%;
+      cursor: pointer;
+    }
+    .file-btn {
+      background: transparent; border: 1px dashed var(--muted);
+      color: var(--muted); padding: 10px 14px; border-radius: 4px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .file-selected { border-color: var(--accent); color: var(--accent); }
+    .file-label {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: var(--muted); pointer-events: none; font-size: 0.85em;
+    }
+    .send-btn {
+      background: var(--accent); color: #000; padding: 0 18px;
+      border: none; border-radius: 4px; cursor: pointer; font-weight: bold;
+      white-space: nowrap;
+    }
+    .send-btn:disabled { background: var(--muted); color: #334155; cursor: not-allowed; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+    @media (max-width: 768px) {
+      main { flex-direction: column; }
+      aside { width: 100%; max-width: none; height: 220px; overflow-y: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">JINNI <span style="color:var(--muted)">MONOLIT‑MOS</span></div>
+    <div>
+      <span class="status-dot online" id="status-dot"></span>
+      <span style="font-size:0.8em; color:var(--muted)">API ONLINE</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Sidebar: Agents -->
+    <aside>
+      <h3 style="color:var(--accent); margin-bottom:8px;">АГЕНТЫ</h3>
+      <button class="agent-btn active" data-agent="SMETTER">📋 СМЕТЧИК</button>
+      <button class="agent-btn" data-agent="CODER">🤖 ИИ‑КОДЕР</button>
+      <button class="agent-btn" data-agent="ENGINEER">📐 ИНЖЕНЕР</button>
+      <button class="agent-btn" data-agent="PLANNER">📅 ПЛАНИРОВЩИК</button>
+      <button class="agent-btn" data-agent="SCOUT">🕵️ РАДАР</button>
+    </aside>
+
+    <!-- Chat -->
+    <div class="chat-container">
+      <div id="chat-log">
+        <div class="msg jinni">
+          <div class="msg-bubble">
+            Привет, MONOLIT‑MOS! Я Джинни. Выбери агента слева и напиши задачу.<br>
+            Можно прикрепить Excel‑файлы для расчёта.
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Area -->
+      <div class="input-area">
+        <div id="file-input-wrapper" style="width:42px; height:40px;">
+          <label for="file-input" class="file-btn file-label" id="file-label">📎</label>
+          <input type="file" id="file-input" multiple accept=".xlsx,.xls,.csv" style="display:none">
+        </div>
+        <textarea id="text-input" placeholder="Напиши задачу (например: «пол 45 стены 110»)..." rows="1"></textarea>
+        <button class="send-btn" id="send-btn">ОТПРАВИТЬ</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const chatLog = document.getElementById('chat-log');
+    const textInput = document.getElementById('text-input');
+    const sendBtn = document.getElementById('send-btn');
+    const fileInput = document.getElementById('file-input');
+    const fileLabel = document.getElementById('file-label');
+    let currentAgent = 'SMETTER';
+
+    // Выбор агента
+    document.querySelectorAll('.agent-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentAgent = btn.dataset.agent;
+        textInput.focus();
+      });
+    });
+
+    // Обработка выбора файлов
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length) {
+        fileLabel.textContent = `📎 ${files.map(f => f.name).join(', ')}`;
+        fileLabel.classList.add('file-selected');
+      } else {
+        fileLabel.textContent = '📎';
+        fileLabel.classList.remove('file-selected');
+      }
+    });
+
+    // Авто‑высота textarea
+    textInput.addEventListener('input', () => {
+      textInput.style.height = 'auto';
+      textInput.style.height = textInput.scrollHeight + 'px';
+    });
+
+    // Отправка команды
+    async function sendDirective(text) {
+      const formData = new FormData();
+      formData.append('command', `${currentAgent.toUpperCase()}: ${text}`);
+
+      // Прикладываем файлы, если есть
+      for (const file of fileInput.files) {
+        formData.append('files', file);
+      }
+
+      textInput.disabled = true;
+      sendBtn.disabled = true;
+      logMessage('Джинни> Выполняю расчёт…');
+
+      try {
+        const res = await fetch('/api/command', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          logMessage(`Джинни> Ошибка: ${errData.detail || 'Неизвестная ошибка API'}`);
+          return;
+        }
+
+        // Пытаемся понять, что пришло: JSON или бинарный файл
+        // Сначала пробуем JSON
+        let json;
+        try {
+          json = await res.json();
+        } catch (e) {
+          // Не JSON — значит, это Excel (или другой бинарный)
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'estimate_batch_monolit.xlsx';
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          logMessage('Джинни> Смета сформирована и скачана.');
+          return;
+        }
+
+        // Если JSON — показываем ответ в чате
+        const reply = json.reply || 'Нет ответа от агента.';
+        logMessage(`Джинни> ${reply}`);
+      } catch (e) {
+        logMessage('Джинни> Ошибка сети или сервера.');
+      } finally {
+        textInput.disabled = false;
+        sendBtn.disabled = false;
+        textInput.value = '';
+        textInput.style.height = '40px';
+        textInput.focus();
+
+        // Сброс файлов после отправки
+        fileInput.value = '';
+        fileLabel.textContent = '📎';
+        fileLabel.classList.remove('file-selected');
+      }
+    }
+
+    // Логирование сообщений в чат
+    function logMessage(text, isUser = false) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `msg ${isUser ? 'user' : 'jinni'}`;
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+
+      // Простой рендер Markdown: ```code``` → code-block
+      let content = text.replace(/```([\s\S]*?)```/g, (_, code) =>
+        `<div class="code-block">${escapeHtml(code)}</div>`
+      );
+
+      bubble.innerHTML = content;
+      msgDiv.appendChild(bubble);
+      chatLog.appendChild(msgDiv);
+
+      // Автоскролл вниз
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Обработчики событий
+    sendBtn.addEventListener('click', () => {
+      const text = textInput.value.trim();
+      if (!text) return;
+      logMessage(text, true);
+      sendDirective(text);
+    });
+
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+  </script>
+</body>
+</html>
