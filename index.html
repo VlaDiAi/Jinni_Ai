@@ -1,92 +1,158 @@
-# index.py
-# ==============================================================================
-# КАНОНИЧЕСКИЙ РЕЕСТР РАБОТ (WORK_INDEX)
-# ==============================================================================
-# Здесь хранятся только данные. Не добавляй сюда логику, импорты или FastAPI.
-# Формат: { "Номер_сборки": [ { "name": "...", "unit": "...", "vol": ..., "price": ... }, ... ] }
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Джинни — Центральный Оркестратор</title>
+    <style>
+        body { background: #050b14; color: #00f0ff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
+        .panel { border: 2px solid #00f0ff; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,240,255,0.3); background: rgba(5, 11, 20, 0.9); width: 100%; max-width: 500px; text-align: center; }
+        h1 { margin: 0 0 15px 0; font-size: 1.2rem; }
+        .agent-selector { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
+        .agent-btn { background: #001a24; border: 1px solid rgba(0, 240, 255, 0.4); color: #00bfff; padding: 8px 5px; font-size: 11px; border-radius: 5px; cursor: pointer; font-family: monospace; }
+        .agent-btn.active { background: #00f0ff; color: #000; box-shadow: 0 0 10px #00f0ff; border-color: #00f0ff; font-weight: bold; }
+        .chat-log { border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 5, 10, 0.6); border-radius: 8px; height: 180px; overflow-y: auto; text-align: left; padding: 15px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 6px 8px; border-radius: 4px; max-width: 100%; word-wrap: break-word; }
+        .msg.user { background: rgba(0, 191, 255, 0.15); align-self: flex-end; text-align: right; }
+        .msg.bot { background: rgba(255, 255, 255, 0.05); align-self: flex-start; }
+        .input-area { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .text-input { flex-grow: 1; background: rgba(0, 5, 10, 0.8); border: 1px solid rgba(0, 240, 255, 0.5); border-radius: 5px; padding: 12px; color: #00f0ff; font-family: monospace; outline: none; min-width: 200px; }
+        .file-label, .voice-btn { background: #003344; border: 1px solid #00f0ff; color: #00f0ff; padding: 10px 14px; border-radius: 5px; cursor: pointer; font-size: 16px; font-family: monospace; text-align: center; white-space: nowrap; }
+        .voice-btn { background: #1a0026; border-color: #ff00cc; color: #ffcc00; }
+        #fileInput { display: none; }
+        .preview-box { display: none; margin-bottom: 10px; text-align: left; border: 1px dashed #00ffcc; padding: 10px; background: rgba(0, 50, 40, 0.4); font-size: 11px; }
+        .download-btn { display: none; margin-top: 15px; background: #00ffcc; color: #000; padding: 12px 25px; border-radius: 5px; font-weight: bold; text-decoration: none; box-shadow: 0 0 15px #00ffcc; width: 100%; box-sizing: border-box; text-align: center; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h1>ЦЕНТРАЛЬНЫЙ ОРКЕСТРАТОР ДЖИННИ</h1>
+        <div class="agent-selector">
+            <button class="agent-btn active" onclick="setAgent('auto', this)">🤖 АВТО-ИИ</button>
+            <button class="agent-btn" onclick="setAgent('smetter', this)">📊 СМЕТЧИК</button>
+            <button class="agent-btn" onclick="setAgent('scout', this)">🕵️ РАДАР</button>
+            <button class="agent-btn" onclick="setAgent('engineer', this)">📐 ИНЖЕНЕР</button>
+            <button class="agent-btn" onclick="setAgent('coder', this)">💻 КОДЕР</button>
+            <button class="agent-btn" onclick="setAgent('planner', this)">📅 ПЛАНЕР</button>
+        </div>
+        <div id="chatLog" class="chat-log">
+            <div class="msg bot">Джинни> Комплекс MONOLIT-MOS активен, сэр. Введите директиву или прикрепите замеры.</div>
+        </div>
+        <div id="previewBox" class="preview-box">
+            📦 Файлы в очереди:<div id="fileListNames" style="color:#00ffff;"></div>
+        </div>
+        <div class="input-area">
+            <label for="fileInput" class="file-label">📎 Файл</label>
+            <input type="file" id="fileInput" multiple accept=".xlsx, .xls, image/*" style="display:none;" onchange="handleFiles(this)">
+            <button id="voiceBtn" class="voice-btn" title="На мобильных открывает выбор медиа (в т.ч. голосовые)" onclick="triggerVoiceOrMedia()">🎤 Голос / Медиа</button>
+            <input type="text" id="textInput" class="text-input" placeholder="Директива (Enter)..." onkeydown="if(event.key==='Enter') sendCommand()">
+        </div>
+        <a id="downloadBtn" class="download-btn" href="/api/download-estimate" download="estimate_batch_monolit.xlsx">📥 СКАЧАТЬ СВОДНУЮ СМЕТУ EXCEL</a>
+    </div>
 
-WORK_INDEX = {
-    "1": [
-        {"name": "Организация работ (защита окон пленкой, временное освещение)", "unit": "компл", "vol": 1.0, "price": 7500.0},
-        {"name": "Демонтаж радиаторов отопления от застройщика", "unit": "шт", "vol": 4.0, "price": 2500.0},
-        {"name": "Устройство временного унитаза и освещения", "unit": "компл", "vol": 1.0, "price": 7400.0},
-        {"name": "Демонтаж существующих трубопроводов отопления от застройщика", "unit": "м.п.", "vol": 44.0, "price": 200.0},
-    ],
-    "2": [
-        {"name": "Монтаж демпферной ленты под перегородки", "unit": "м.п.", "vol": 35.0, "price": 204.0},
-        {"name": "Кладка перегородок из ПГП 80 мм (межкомнатные)", "unit": "м²", "vol": 35.0, "price": 1690.0},
-        {"name": "Кладка перегородок из ПГП 100 мм (влагостойкие, санузел)", "unit": "м²", "vol": 18.34, "price": 1790.0},
-        {"name": "Монтаж перемычек над дверными проемами", "unit": "шт", "vol": 4.0, "price": 2040.0},
-        {"name": "Армирование примыканий перегородок к бетону (стены/потолок)", "unit": "м.п.", "vol": 35.0, "price": 408.0},
-    ],
-    "3": [
-        {"name": "Грунтование стен (бетоноконтакт / глубокое проникновение)", "unit": "м²", "vol": 118.62, "price": 204.0},
-        {"name": "Механизированная штукатурка стен до 20 мм толщиной по маякам", "unit": "м²", "vol": 65.28, "price": 1020.0},
-        {"name": "Глянцевание под покраску", "unit": "м²", "vol": 65.28, "price": 340.0},
-        {"name": "Монтаж штукатурных откосов (окна)", "unit": "м.п.", "vol": 20.0, "price": 1220.0},
-    ],
-    "4": [
-        {"name": "Устройство звукоизоляции пола (Шуманет/ТЗИ под стяжку)", "unit": "м²", "vol": 47.59, "price": 611.0},
-        {"name": "Механизированное устройство полусухой стяжки пола толщиной до 70 мм", "unit": "м²", "vol": 47.59, "price": 1090.0},
-        {"name": "Обмазочная гидроизоляция пола и стен санузла", "unit": "м²", "vol": 15.0, "price": 883.0},
-        {"name": "Чистовая стяжка самовыравнивающейся смесью (наливной пол)", "unit": "м²", "vol": 40.0, "price": 643.0},
-        {"name": "Грунтование пола", "unit": "м²", "vol": 95.18, "price": 150.0},
-    ],
-    "5": [
-        {"name": "Алмазная резка монолитного железобетона (толщина до 200 мм)", "unit": "м.п.", "vol": 2.4, "price": 3800.0},
-        {"name": "Поэтапный демонтаж и выемка фрагментов бетона из проема", "unit": "шт", "vol": 4.0, "price": 500.0},
-        {"name": "Монтаж коллекторного узла ХВС/ГВС (гребенка, фанера, рама)", "unit": "шт", "vol": 1.0, "price": 24460.0},
-        {"name": "Монтаж системы защиты от протечек (краны с сервоприводом)", "unit": "компл", "vol": 1.0, "price": 8150.0},
-        {"name": "Разводка труб водоснабжения и канализации REHAU до точек", "unit": "точка", "vol": 7.0, "price": 6110.0},
-        {"name": "Установка инсталляции для унитаза (черновой монтаж)", "unit": "шт", "vol": 1.0, "price": 6790.0},
-        {"name": "Монтаж коллектора отопления и прокладка труб из МОП", "unit": "компл", "vol": 1.0, "price": 21740.0},
-        {"name": "Монтаж и подключение радиаторов отопления (нижнее подкл.)", "unit": "шт", "vol": 4.0, "price": 7470.0},
-        {"name": "Монтаж магистральных фильтров тонкой очистки ХВС/ГВС с КИПиА", "unit": "компл", "vol": 1.0, "price": 6500.0},
-        {"name": "Устройство усиленного пространственного металлокаркаса под сантехмодули", "unit": "шт", "vol": 1.0, "price": 7500.0},
-        {"name": "Технологическая обшивка сантехнических каркасов ГКЛВ в 2 слоя", "unit": "шт", "vol": 1.0, "price": 9000.0},
-    ],
-    "6": [
-        {"name": "Штробление стен под кабель (бетон / ПГП среднее)", "unit": "м.п.", "vol": 80.0, "price": 611.0},
-        {"name": "Прокладка кабеля ГОСТ (ВВГнг-LS) в гофре по потолку/полу", "unit": "м.п.", "vol": 450.0, "price": 217.0},
-        {"name": "Высверливание отверстий и монтаж подрозетников", "unit": "шт", "vol": 45.0, "price": 476.0},
-        {"name": "Сборка и расключение внутриквартирного электрощита", "unit": "шт", "vol": 1.0, "price": 50000.0},
-        {"name": "Базовый комплекс по закладке межблочных коммуникаций кондиционера", "unit": "трасса", "vol": 2.0, "price": 15550.0},
-        {"name": "Комплектация и прокладка дополнительных погонных метров фреономагистрали", "unit": "м.п.", "vol": 12.0, "price": 2000.0},
-        {"name": "Прокладка дренажного трубопровода кондиционирования", "unit": "компл", "vol": 1.0, "price": 4500.0},
-    ],
-    "7": [
-        {"name": "Грунтование стен глубокого проникновения", "unit": "м²", "vol": 106.68, "price": 204.0},
-        {"name": "Шпаклевка ПГП с двух сторон под обои (2 слоя)", "unit": "м²", "vol": 106.68, "price": 711.0},
-        {"name": "Шлифовка ПГП с двух сторон", "unit": "м²", "vol": 106.68, "price": 204.0},
-        {"name": "Поклейка обоев (флизелиновые/виниловые без подбора)", "unit": "м²", "vol": 150.0, "price": 743.0},
-        {"name": "Монтаж натяжного потолка (ПВХ матовый, стандарт)", "unit": "м²", "vol": 47.59, "price": 1190.0},
-    ],
-    "8": [
-        {"name": "Укладка керамогранита на пол (коридор, кухня, санузел)", "unit": "м²", "vol": 18.0, "price": 4500.0},
-        {"name": "Облицовка стен плиткой (санузел)", "unit": "м²", "vol": 25.0, "price": 4900.0},
-        {"name": "Монтаж кухонного фартука из плитки", "unit": "м²", "vol": 3.0, "price": 5000.0},
-    ],
-    "9": [
-        {"name": "Установка межкомнатных дверей «под ключ»", "unit": "шт", "vol": 4.0, "price": 7440.0},
-        {"name": "Навеска блоков кондиционеров (внутренний + наружный)", "unit": "компл", "vol": 2.0, "price": 2720.0},
-        {"name": "Установка раковины с тумбой", "unit": "шт", "vol": 1.0, "price": 2040.0},
-        {"name": "Установка унитаза (комплект)", "unit": "шт", "vol": 1.0, "price": 950.0},
-        {"name": "Установка ванны", "unit": "шт", "vol": 1.0, "price": 14700.0},
-        {"name": "Установка полотенцесушителя", "unit": "шт", "vol": 1.0, "price": 7400.0},
-        {"name": "Установка смесителя", "unit": "шт", "vol": 2.0, "price": 4700.0},
-        {"name": "Установка плинтуса напольного", "unit": "м.п.", "vol": 60.0, "price": 1470.0},
-        {"name": "Вывоз мусора контейнером 20 м³", "unit": "шт", "vol": 1.0, "price": 25000.0},
-    ],
-    "10": [
-        {"name": "Комплексная механизированная очистка и обеспыливание плиты перекрытия", "unit": "м²", "vol": 6.0, "price": 350.0},
-        {"name": "Укладка отсечной рулонной гидроизоляции по основанию балкона", "unit": "м²", "vol": 6.0, "price": 400.0},
-        {"name": "Устройство демпферного шва по периметру и терморазрыва в зоне порога", "unit": "м.п.", "vol": 10.0, "price": 250.0},
-        {"name": "Армирование стяжки металлической сеткой", "unit": "м²", "vol": 6.0, "price": 450.0},
-        {"name": "Устройство стяжки балкона с фиброй и модификаторами", "unit": "м²", "vol": 6.0, "price": 2500.0},
-        {"name": "Грунтование и подготовка основания под керамогранит", "unit": "м²", "vol": 6.0, "price": 1500.0},
-        {"name": "Укладка напольного керамогранита прямым способом", "unit": "м²", "vol": 6.0, "price": 500.0},
-        {"name": "Затирка межплиточных швов влагостойким составом", "unit": "м²", "vol": 6.0, "price": 600.0},
-        {"name": "Монтаж накладного комнатного плинтуса по периметру балкона", "unit": "м.п.", "vol": 10.0, "price": 600.0},
-        {"name": "Технологический раскрой керамогранита на станке-водорезе", "unit": "м.п.", "vol": 12.0, "price": 450.0},
-    ]
-}
+    <script>
+        let currentAgent = 'auto';
+        const chatLog = document.getElementById('chatLog');
+        const fileListNames = document.getElementById('fileListNames');
+        const previewBox = document.getElementById('previewBox');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const fileBase64Array = [];
+        const fileNameArray = [];
+
+        function setAgent(agent, btn) {
+            currentAgent = agent;
+            document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            addMsg(`Джинни> Агент переключён: ${agent.toUpperCase()}`, 'bot');
+        }
+
+        function addMsg(text, type) {
+            const div = document.createElement('div');
+            div.className = `msg ${type}`;
+            div.textContent = text;
+            chatLog.appendChild(div);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        function handleFiles(input) {
+            const files = Array.from(input.files);
+            if (files.length === 0) return;
+            fileBase64Array.length = 0;
+            fileNameArray.length = 0;
+            previewBox.style.display = 'block';
+            fileListNames.innerHTML = '';
+            files.forEach((file, i) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    fileBase64Array[i] = e.target.result.split(',')[1]; // base64 без префикса
+                    fileNameArray[i] = file.name;
+                    fileListNames.innerHTML += `<div>${file.name}</div>`;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Кнопка «Голос» — на мобильных Telegram Web App это просто вызов выбора медиа
+        function triggerVoiceOrMedia() {
+            // В Telegram Web App нет прямого API для записи голоса, но можно открыть выбор медиа
+            if (window.Telegram?.WebApp) {
+                window.Telegram.WebApp.openMediaPicker({
+                    onSuccess: (files) => {
+                        files.forEach(f => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                fileBase64Array.push(e.target.result.split(',')[1]);
+                                fileNameArray.push(f.file_unique_id || f.name || 'media');
+                                previewBox.style.display = 'block';
+                                fileListNames.innerHTML += `<div>${f.name || 'Голосовое/медиа'}</div>`;
+                            };
+                            if (f.blob) reader.readAsDataURL(f.blob);
+                        });
+                    },
+                    onCancel: () => addMsg('Джинни> Выбор медиа отменён.', 'bot')
+                });
+            } else {
+                // Фоллбэк для обычного браузера: просто открываем стандартный выбор файлов
+                document.getElementById('fileInput').click();
+            }
+        }
+
+        async function sendCommand() {
+            const text = document.getElementById('textInput').value.trim();
+            if (!text && fileBase64Array.length === 0) {
+                addMsg('Джинни> Введите текст или прикрепите файл.', 'bot');
+                return;
+            }
+            const command = `${currentAgent.toUpperCase()}: ${text}`;
+            addMsg(`${text}`, 'user');
+            document.getElementById('textInput').value = '';
+
+            try {
+                const res = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        command: command,
+                        file_data_list: fileBase64Array,
+                        file_name_list: fileNameArray
+                    })
+                });
+                if (!res.ok) throw new Error('Ошибка сервера');
+                const data = await res.json();
+                addMsg(data.reply, 'bot');
+                if (data.has_estimate) {
+                    downloadBtn.style.display = 'block';
+                }
+            } catch (e) {
+                addMsg(`Джинни> ❌ Ошибка: ${e.message}`, 'bot');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.Telegram?.WebApp) {
+                window.Telegram.WebApp.ready();
+            }
+        });
+    </script>
+</body>
+</html>
