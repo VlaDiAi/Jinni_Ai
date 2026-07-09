@@ -200,4 +200,13 @@ async def process_command(request: CommandRequest):
         logger.exception(e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@
+@app.get("/api/download-estimate")
+async def download_estimate():
+    global CURRENT_ESTIMATE_BYTES
+    if not CURRENT_ESTIMATE_BYTES:
+        raise HTTPException(status_code=404, detail="Смета ещё не сформирована. Сначала отправьте команду SMETTER.")
+    return StreamingResponse(
+        BytesIO(CURRENT_ESTIMATE_BYTES),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=smeta.xlsx"}
+    )
