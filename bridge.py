@@ -9,7 +9,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Border, Side, Font, Alignment
 from openpyxl.utils import get_column_letter
 
-# --- AIogram для Telegram ---
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 import asyncio
@@ -20,7 +19,6 @@ logger = logging.getLogger("JinniOrchestrator")
 app = FastAPI(title="MONOLIT-MOS Jarvis")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- Telegram Bot Setup ---
 TG_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = None
 dp = None
@@ -43,7 +41,6 @@ if TG_BOT_TOKEN:
             )
         )
 
-# --- Импорт справочника работ ---
 try:
     from work_index import WORK_INDEX
 except ImportError as e:
@@ -54,10 +51,6 @@ CURRENT_ESTIMATE_BYTES = None
 BACKUP_HTML = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Джинни</title></head><body style="background:#050b14;color:#00f0ff;font-family:monospace;text-align:center;padding:50px;"><h2>[КРИТИЧЕСКАЯ ОШИБКА]: Файл index.html не найден!</h2></body></html>"""
 
 def load_smetter_catalog() -> list:
-    """
-    Возвращает плоский список позиций из WORK_INDEX.
-    Каждая позиция: {"name": ..., "unit": ..., "price_work": ..., "stage": ...}
-    """
     catalog_items = []
     for stage, items in WORK_INDEX.items():
         for item in items:
@@ -80,7 +73,6 @@ async def serve_index():
 
 @app.get("/app")
 async def serve_mini_app():
-    """Стабильная ссылка для Telegram Web App"""
     if os.path.exists("index.html"):
         with open("index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read(), status_code=200)
@@ -101,7 +93,6 @@ async def process_command(request: CommandRequest):
         q_low = query.lower()
         catalog = load_smetter_catalog()
 
-        # Авто-маршрутизация
         if prefix == "AUTO":
             if any(k in q_low for k in ["радар", "скаут", "лид"]): prefix = "SCOUT"
             elif any(k in q_low for k in ["код", "обнови", "github"]): prefix = "CODER"
@@ -129,11 +120,9 @@ async def process_command(request: CommandRequest):
 
         elif prefix == "SMETTER":
             matched = []
-            # Если запрос пустой — отдаём первые N позиций
             if query == "":
                 matched = catalog[:50]
             else:
-                # Простой поиск по словам
                 keywords = query.split()
                 for item in catalog:
                     if any(kw in item["name"].lower() for kw in keywords):
@@ -162,7 +151,7 @@ async def process_command(request: CommandRequest):
             total_sum = 0.0
             row_idx = 2
             for item in matched:
-                vol = 1.0  # можно усложнить: парсить числа из запроса
+                vol = 1.0
                 amount = vol * item["price_work"]
                 total_sum += amount
                 ws.append([
@@ -186,4 +175,29 @@ async def process_command(request: CommandRequest):
             # Автоширина колонок
             for col in ws.columns:
                 max_length = 0
-                column = col[0].
+                column = col[0].column_letter
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                ws.column_dimensions[column].width = adjusted_width
+
+            out = BytesIO()
+            wb.save(out)
+            out.seek(0)
+            CURRENT_ESTIMATE_BYTES = out.read()
+
+            return {
+                "reply": f"📊 [СМЕТЧИК]: Смета сформирована. Найдено позиций: {len(matched)}, итого: {total_sum:,.2f} ₽",
+                "has_estimate": True
+            }
+
+        return {"reply": "❓ Неизвестный агент.", "has_estimate": False}
+    except Exception as e:
+        logger.exception(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@
